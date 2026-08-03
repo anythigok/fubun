@@ -1,0 +1,210 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AdapterRequestEnvelope",
+  "type": "object",
+  "required": [
+    "action_execution_id",
+    "body",
+    "protocol_version",
+    "request_id"
+  ],
+  "properties": {
+    "action_execution_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "body": {
+      "$ref": "#/definitions/AdapterRequestBody"
+    },
+    "protocol_version": {
+      "$ref": "#/definitions/ProtocolVersion"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ActionExecuteRequest": {
+      "type": "object",
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/ActionSpec"
+        },
+        "resolved_resource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResolvedResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ActionSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "app_id",
+            "type"
+          ],
+          "properties": {
+            "app_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.app.ensure_running.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.path.open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "body",
+            "title",
+            "type"
+          ],
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "desktop.notification.show.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AdapterRequestBody": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "action.execute"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/ActionExecuteRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "adapter.status"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/AdapterStatusRequest"
+            }
+          }
+        }
+      ]
+    },
+    "AdapterStatusRequest": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "ProtocolVersion": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResolvedResource": {
+      "type": "object",
+      "required": [
+        "canonical_locator",
+        "kind",
+        "resource_id"
+      ],
+      "properties": {
+        "canonical_locator": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ResourceKind"
+        },
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceKind": {
+      "type": "string",
+      "enum": [
+        "filesystem.file",
+        "filesystem.directory"
+      ]
+    }
+  }
+}

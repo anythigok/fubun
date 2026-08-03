@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExecutionStep",
+  "type": "object",
+  "required": [
+    "action_type",
+    "execution_id",
+    "id",
+    "started_at",
+    "status",
+    "step_index"
+  ],
+  "properties": {
+    "action_type": {
+      "type": "string"
+    },
+    "adapter_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "execution_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "finished_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "redacted_message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/ExecutionStepStatus"
+    },
+    "step_index": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecutionStepStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "skipped",
+        "failed",
+        "aborted"
+      ]
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ritual",
+  "type": "object",
+  "required": [
+    "created_at",
+    "current_version_id",
+    "id",
+    "name",
+    "status",
+    "updated_at"
+  ],
+  "properties": {
+    "created_at": {
+      "type": "string"
+    },
+    "current_version_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/RitualStatus"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "RitualStatus": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "active",
+        "paused",
+        "archived"
+      ]
+    }
+  }
+}

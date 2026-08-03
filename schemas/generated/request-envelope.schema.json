@@ -21,6 +21,72 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "ActionSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "app_id",
+            "type"
+          ],
+          "properties": {
+            "app_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.app.ensure_running.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.path.open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "body",
+            "title",
+            "type"
+          ],
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "desktop.notification.show.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "Actor": {
       "type": "string",
       "enum": [
@@ -29,6 +95,38 @@
         "system",
         "imported"
       ]
+    },
+    "AdapterHello": {
+      "type": "object",
+      "required": [
+        "action_capabilities",
+        "adapter_id",
+        "adapter_version",
+        "instance_id",
+        "status"
+      ],
+      "properties": {
+        "action_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "adapter_id": {
+          "type": "string"
+        },
+        "adapter_version": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "$ref": "#/definitions/AdapterStatusSnapshot"
+        }
+      },
+      "additionalProperties": false
     },
     "AdapterIdentity": {
       "type": "object",
@@ -52,6 +150,44 @@
           "minimum": 0.0
         },
         "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdapterStatusSnapshot": {
+      "type": "object",
+      "required": [
+        "desktop_entry_ids",
+        "tools"
+      ],
+      "properties": {
+        "desktop_entry_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AdapterToolStatus"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdapterToolStatus": {
+      "type": "object",
+      "required": [
+        "available",
+        "name"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "name": {
           "type": "string"
         }
       },
@@ -195,6 +331,31 @@
       },
       "additionalProperties": false
     },
+    "ExecutionIdRequest": {
+      "type": "object",
+      "required": [
+        "execution_id"
+      ],
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionMode": {
+      "type": "string",
+      "enum": [
+        "sequential"
+      ]
+    },
+    "FailureMode": {
+      "type": "string",
+      "enum": [
+        "stop"
+      ]
+    },
     "PrivacyClass": {
       "type": "string",
       "enum": [
@@ -313,7 +474,443 @@
               "$ref": "#/definitions/EmptyRequest"
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "adapter.hello"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/AdapterHello"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "resource.create"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/ResourceCreateRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "resource.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "resource.show"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/ResourceIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.create"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/RitualCreateRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.update"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/RitualUpdateRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.show"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/RitualIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.preview"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/RitualIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.activate"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/RitualActivateRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.pause"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/RitualIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "ritual.run"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/RitualIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "adapter.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "adapter.status"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "execution.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "execution.show"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/ExecutionIdRequest"
+            }
+          }
         }
+      ]
+    },
+    "ResourceCreateRequest": {
+      "type": "object",
+      "required": [
+        "label",
+        "path",
+        "sensitivity"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sensitivity": {
+          "$ref": "#/definitions/Sensitivity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceIdRequest": {
+      "type": "object",
+      "required": [
+        "resource_id"
+      ],
+      "properties": {
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualActivateRequest": {
+      "type": "object",
+      "required": [
+        "approve",
+        "ritual_id"
+      ],
+      "properties": {
+        "approve": {
+          "type": "boolean"
+        },
+        "ritual_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualCreateRequest": {
+      "type": "object",
+      "required": [
+        "definition"
+      ],
+      "properties": {
+        "definition": {
+          "$ref": "#/definitions/RitualDefinition"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualDefinition": {
+      "type": "object",
+      "required": [
+        "actions",
+        "execution",
+        "name",
+        "schema_version"
+      ],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActionSpec"
+          }
+        },
+        "execution": {
+          "$ref": "#/definitions/RitualExecutionConfig"
+        },
+        "name": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualExecutionConfig": {
+      "type": "object",
+      "required": [
+        "mode",
+        "on_failure",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/ExecutionMode"
+        },
+        "on_failure": {
+          "$ref": "#/definitions/FailureMode"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualIdRequest": {
+      "type": "object",
+      "required": [
+        "ritual_id"
+      ],
+      "properties": {
+        "ritual_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualUpdateRequest": {
+      "type": "object",
+      "required": [
+        "definition",
+        "ritual_id"
+      ],
+      "properties": {
+        "definition": {
+          "$ref": "#/definitions/RitualDefinition"
+        },
+        "ritual_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Sensitivity": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "sensitive"
       ]
     },
     "SyntheticEventData": {

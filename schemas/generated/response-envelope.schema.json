@@ -21,6 +21,72 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "ActionSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "app_id",
+            "type"
+          ],
+          "properties": {
+            "app_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.app.ensure_running.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.path.open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "body",
+            "title",
+            "type"
+          ],
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "desktop.notification.show.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "Actor": {
       "type": "string",
       "enum": [
@@ -50,6 +116,61 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdapterList": {
+      "type": "object",
+      "required": [
+        "adapters"
+      ],
+      "properties": {
+        "adapters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AdapterReport"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdapterReport": {
+      "type": "object",
+      "required": [
+        "adapter_id",
+        "capabilities",
+        "connected",
+        "connected_at",
+        "instance_id",
+        "last_seen_at",
+        "version"
+      ],
+      "properties": {
+        "adapter_id": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "connected": {
+          "type": "boolean"
+        },
+        "connected_at": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "last_seen_at": {
+          "type": "string"
         },
         "version": {
           "type": "string"
@@ -98,21 +219,65 @@
     "DoctorReport": {
       "type": "object",
       "required": [
+        "action_registry_version",
+        "active_rituals",
+        "connected_adapters",
         "database_path",
         "database_status",
-        "schema_version"
+        "draft_rituals",
+        "gtk_launch_available",
+        "notify_send_available",
+        "ritual_schema_version",
+        "running_executions",
+        "schema_version",
+        "xdg_open_available"
       ],
       "properties": {
+        "action_registry_version": {
+          "type": "string"
+        },
+        "active_rituals": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "connected_adapters": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
         "database_path": {
           "type": "string"
         },
         "database_status": {
           "type": "string"
         },
+        "draft_rituals": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "gtk_launch_available": {
+          "type": "boolean"
+        },
+        "notify_send_available": {
+          "type": "boolean"
+        },
+        "ritual_schema_version": {
+          "type": "string"
+        },
+        "running_executions": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
         "schema_version": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
+        },
+        "xdg_open_available": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -226,6 +391,247 @@
         "dev.fubun.dev.synthetic.v1"
       ]
     },
+    "Execution": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "id",
+        "ritual_id",
+        "ritual_version_id",
+        "started_at",
+        "status",
+        "trigger_kind"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "failure_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ritual_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ritual_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ExecutionStatus"
+        },
+        "trigger_kind": {
+          "$ref": "#/definitions/TriggerKind"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionList": {
+      "type": "object",
+      "required": [
+        "executions"
+      ],
+      "properties": {
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Execution"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionMode": {
+      "type": "string",
+      "enum": [
+        "sequential"
+      ]
+    },
+    "ExecutionRecord": {
+      "type": "object",
+      "required": [
+        "execution",
+        "steps"
+      ],
+      "properties": {
+        "execution": {
+          "$ref": "#/definitions/Execution"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExecutionStep"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionStatus": {
+      "type": "string",
+      "enum": [
+        "planned",
+        "running",
+        "succeeded",
+        "failed",
+        "partial",
+        "aborted"
+      ]
+    },
+    "ExecutionStep": {
+      "type": "object",
+      "required": [
+        "action_type",
+        "execution_id",
+        "id",
+        "started_at",
+        "status",
+        "step_index"
+      ],
+      "properties": {
+        "action_type": {
+          "type": "string"
+        },
+        "adapter_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "redacted_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ExecutionStepStatus"
+        },
+        "step_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionStepStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "skipped",
+        "failed",
+        "aborted"
+      ]
+    },
+    "FailureMode": {
+      "type": "string",
+      "enum": [
+        "stop"
+      ]
+    },
+    "PreviewAction": {
+      "type": "object",
+      "required": [
+        "action_type",
+        "adapter_connected",
+        "idempotency",
+        "required_capability",
+        "revertability",
+        "risk_level",
+        "step_index"
+      ],
+      "properties": {
+        "action_type": {
+          "type": "string"
+        },
+        "adapter_connected": {
+          "type": "boolean"
+        },
+        "desktop_entry_exists": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "idempotency": {
+          "type": "string"
+        },
+        "required_capability": {
+          "type": "string"
+        },
+        "resource_exists": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "resource_path_matches": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "revertability": {
+          "type": "string"
+        },
+        "risk_level": {
+          "type": "string"
+        },
+        "step_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "PrivacyClass": {
       "type": "string",
       "enum": [
@@ -252,6 +658,79 @@
         }
       },
       "additionalProperties": false
+    },
+    "Resource": {
+      "type": "object",
+      "required": [
+        "canonical_locator",
+        "created_at",
+        "id",
+        "kind",
+        "label",
+        "locator",
+        "scope",
+        "sensitivity",
+        "updated_at"
+      ],
+      "properties": {
+        "canonical_locator": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "$ref": "#/definitions/ResourceKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "locator": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/ResourceScope"
+        },
+        "sensitivity": {
+          "$ref": "#/definitions/Sensitivity"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceKind": {
+      "type": "string",
+      "enum": [
+        "filesystem.file",
+        "filesystem.directory"
+      ]
+    },
+    "ResourceList": {
+      "type": "object",
+      "required": [
+        "resources"
+      ],
+      "properties": {
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Resource"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResourceScope": {
+      "type": "string",
+      "enum": [
+        "exact"
+      ]
     },
     "ResponseBody": {
       "oneOf": [
@@ -384,7 +863,511 @@
               ]
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ClientHelloAck"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "adapter.hello_ack"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/Resource"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "resource.created"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ResourceList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "resource.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/Resource"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "resource.show"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/RitualRecord"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.created"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/RitualRecord"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.updated"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/RitualList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/RitualRecord"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.show"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/RitualPreview"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.preview"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/Ritual"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.activated"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/Ritual"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.paused"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ExecutionRecord"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ritual.run"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/AdapterList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "adapter.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/AdapterList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "adapter.status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ExecutionList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "execution.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ExecutionRecord"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "execution.show"
+              ]
+            }
+          }
         }
+      ]
+    },
+    "Ritual": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "current_version_id",
+        "id",
+        "name",
+        "status",
+        "updated_at"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "current_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/RitualStatus"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualDefinition": {
+      "type": "object",
+      "required": [
+        "actions",
+        "execution",
+        "name",
+        "schema_version"
+      ],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActionSpec"
+          }
+        },
+        "execution": {
+          "$ref": "#/definitions/RitualExecutionConfig"
+        },
+        "name": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualExecutionConfig": {
+      "type": "object",
+      "required": [
+        "mode",
+        "on_failure",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/ExecutionMode"
+        },
+        "on_failure": {
+          "$ref": "#/definitions/FailureMode"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualList": {
+      "type": "object",
+      "required": [
+        "rituals"
+      ],
+      "properties": {
+        "rituals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Ritual"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualPreview": {
+      "type": "object",
+      "required": [
+        "actions",
+        "executable",
+        "ritual_id",
+        "ritual_version_id",
+        "timeout_seconds",
+        "warnings"
+      ],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PreviewAction"
+          }
+        },
+        "executable": {
+          "type": "boolean"
+        },
+        "ritual_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ritual_version_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualRecord": {
+      "type": "object",
+      "required": [
+        "definition",
+        "ritual",
+        "version"
+      ],
+      "properties": {
+        "definition": {
+          "$ref": "#/definitions/RitualDefinition"
+        },
+        "ritual": {
+          "$ref": "#/definitions/Ritual"
+        },
+        "version": {
+          "$ref": "#/definitions/RitualVersion"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RitualStatus": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "active",
+        "paused",
+        "archived"
+      ]
+    },
+    "RitualVersion": {
+      "type": "object",
+      "required": [
+        "canonical_json",
+        "content_hash",
+        "created_at",
+        "id",
+        "ritual_id",
+        "schema_version",
+        "version"
+      ],
+      "properties": {
+        "canonical_json": {
+          "type": "string"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ritual_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Sensitivity": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "sensitive"
       ]
     },
     "StatusReport": {
@@ -429,6 +1412,12 @@
         }
       },
       "additionalProperties": false
+    },
+    "TriggerKind": {
+      "type": "string",
+      "enum": [
+        "manual"
+      ]
     }
   }
 }

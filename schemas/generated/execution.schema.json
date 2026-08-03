@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Execution",
+  "type": "object",
+  "required": [
+    "created_at",
+    "id",
+    "ritual_id",
+    "ritual_version_id",
+    "started_at",
+    "status",
+    "trigger_kind"
+  ],
+  "properties": {
+    "created_at": {
+      "type": "string"
+    },
+    "failure_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "finished_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "ritual_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "ritual_version_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/ExecutionStatus"
+    },
+    "trigger_kind": {
+      "$ref": "#/definitions/TriggerKind"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ExecutionStatus": {
+      "type": "string",
+      "enum": [
+        "planned",
+        "running",
+        "succeeded",
+        "failed",
+        "partial",
+        "aborted"
+      ]
+    },
+    "TriggerKind": {
+      "type": "string",
+      "enum": [
+        "manual"
+      ]
+    }
+  }
+}
