@@ -1,0 +1,24 @@
+{
+  "spec_version": "1.0",
+  "id": "018fab00-0000-4000-8000-000000000001",
+  "type": "dev.fubun.dev.synthetic.v1",
+  "source": "fubun-cli",
+  "occurred_at": "2026-08-03T13:00:00Z",
+  "received_at": "2026-08-03T13:00:00Z",
+  "actor": "user",
+  "adapter": {
+    "id": "dev.fubun.fixture",
+    "version": "0.1.0",
+    "instance_id": "018fab00-0000-4000-8000-0000000000a1",
+    "sequence_no": 1
+  },
+  "context": {
+    "project": "fubun",
+    "session": "phase-1-smoke"
+  },
+  "privacy": "normal",
+  "data": {
+    "label": "phase-1-smoke",
+    "counter": 1
+  }
+}

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.85.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
+      - name: Verify generated schemas
+        run: |
+          cargo run -p fubun-protocol --example generate_schemas
+          git diff --exit-code -- schemas/generated
+      - name: Reject TCP listeners and localhost endpoints
+        run: |
+          if grep -R -n -E 'TcpListener|127\.0\.0\.1|localhost' --include='*.rs' crates apps; then
+            exit 1
+          fi

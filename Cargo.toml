@@ -1,0 +1,43 @@
+[workspace]
+members = [
+    "apps/fubun-cli",
+    "apps/fubund",
+    "crates/fubun-core",
+    "crates/fubun-domain",
+    "crates/fubun-protocol",
+    "crates/fubun-storage",
+    "tests/integration",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/anythigok/fubun"
+rust-version = "1.85"
+
+[workspace.dependencies]
+clap = { version = "=4.5.41", features = ["derive"] }
+fubun-core = { path = "crates/fubun-core" }
+fubun-domain = { path = "crates/fubun-domain" }
+fubun-protocol = { path = "crates/fubun-protocol" }
+fubun-storage = { path = "crates/fubun-storage" }
+proptest = "=1.7.0"
+rusqlite = { version = "=0.32.1", features = ["bundled"] }
+schemars = { version = "=0.8.22", features = ["uuid1"] }
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+tempfile = "=3.20.0"
+thiserror = "=2.0.12"
+time = { version = "=0.3.41", features = ["formatting", "parsing", "serde"] }
+tokio = { version = "=1.45.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "=0.1.41"
+tracing-subscriber = { version = "=0.3.19", features = ["fmt"] }
+uuid = { version = "=1.16.0", features = ["serde", "v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

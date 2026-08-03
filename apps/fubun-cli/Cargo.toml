@@ -1,0 +1,25 @@
+[package]
+name = "fubun-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "fubun"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+fubun-core.workspace = true
+fubun-domain.workspace = true
+fubun-protocol.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,337 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RequestEnvelope",
+  "type": "object",
+  "required": [
+    "body",
+    "protocol_version",
+    "request_id"
+  ],
+  "properties": {
+    "body": {
+      "$ref": "#/definitions/RequestBody"
+    },
+    "protocol_version": {
+      "$ref": "#/definitions/ProtocolVersion"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Actor": {
+      "type": "string",
+      "enum": [
+        "user",
+        "fubun",
+        "system",
+        "imported"
+      ]
+    },
+    "AdapterIdentity": {
+      "type": "object",
+      "required": [
+        "id",
+        "instance_id",
+        "sequence_no",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence_no": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ClientHello": {
+      "type": "object",
+      "required": [
+        "client_name",
+        "client_version",
+        "protocol_version"
+      ],
+      "properties": {
+        "client_name": {
+          "type": "string"
+        },
+        "client_version": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "$ref": "#/definitions/ProtocolVersion"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextReference": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EmptyRequest": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "Event": {
+      "type": "object",
+      "required": [
+        "actor",
+        "adapter",
+        "data",
+        "id",
+        "occurred_at",
+        "privacy",
+        "received_at",
+        "source",
+        "spec_version",
+        "type"
+      ],
+      "properties": {
+        "actor": {
+          "$ref": "#/definitions/Actor"
+        },
+        "adapter": {
+          "$ref": "#/definitions/AdapterIdentity"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/definitions/SyntheticEventData"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "occurred_at": {
+          "type": "string"
+        },
+        "privacy": {
+          "$ref": "#/definitions/PrivacyClass"
+        },
+        "received_at": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "spec_version": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/EventType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventIngestRequest": {
+      "type": "object",
+      "required": [
+        "event"
+      ],
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/Event"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "dev.fubun.dev.synthetic.v1"
+      ]
+    },
+    "EventsListRequest": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "default": 100,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "since": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PrivacyClass": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "sensitive"
+      ]
+    },
+    "ProtocolVersion": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequestBody": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "client.hello"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/ClientHello"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "event.ingest"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EventIngestRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "events.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EventsListRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "system.status"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "system.doctor"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        }
+      ]
+    },
+    "SyntheticEventData": {
+      "type": "object",
+      "required": [
+        "counter",
+        "label"
+      ],
+      "properties": {
+        "counter": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,434 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResponseEnvelope",
+  "type": "object",
+  "required": [
+    "body",
+    "protocol_version",
+    "request_id"
+  ],
+  "properties": {
+    "body": {
+      "$ref": "#/definitions/ResponseBody"
+    },
+    "protocol_version": {
+      "$ref": "#/definitions/ProtocolVersion"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Actor": {
+      "type": "string",
+      "enum": [
+        "user",
+        "fubun",
+        "system",
+        "imported"
+      ]
+    },
+    "AdapterIdentity": {
+      "type": "object",
+      "required": [
+        "id",
+        "instance_id",
+        "sequence_no",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence_no": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ClientHelloAck": {
+      "type": "object",
+      "required": [
+        "protocol_version",
+        "server_name",
+        "server_version"
+      ],
+      "properties": {
+        "protocol_version": {
+          "$ref": "#/definitions/ProtocolVersion"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "server_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextReference": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DoctorReport": {
+      "type": "object",
+      "required": [
+        "database_path",
+        "database_status",
+        "schema_version"
+      ],
+      "properties": {
+        "database_path": {
+          "type": "string"
+        },
+        "database_status": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ErrorBody": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Event": {
+      "type": "object",
+      "required": [
+        "actor",
+        "adapter",
+        "data",
+        "id",
+        "occurred_at",
+        "privacy",
+        "received_at",
+        "source",
+        "spec_version",
+        "type"
+      ],
+      "properties": {
+        "actor": {
+          "$ref": "#/definitions/Actor"
+        },
+        "adapter": {
+          "$ref": "#/definitions/AdapterIdentity"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/definitions/SyntheticEventData"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "occurred_at": {
+          "type": "string"
+        },
+        "privacy": {
+          "$ref": "#/definitions/PrivacyClass"
+        },
+        "received_at": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "spec_version": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/EventType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventIngested": {
+      "type": "object",
+      "required": [
+        "event_id"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventList": {
+      "type": "object",
+      "required": [
+        "events"
+      ],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Event"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "dev.fubun.dev.synthetic.v1"
+      ]
+    },
+    "PrivacyClass": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "sensitive"
+      ]
+    },
+    "ProtocolVersion": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResponseBody": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "status"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/ResponsePayload"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "payload",
+            "status"
+          ],
+          "properties": {
+            "payload": {
+              "$ref": "#/definitions/ErrorBody"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ResponsePayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ClientHelloAck"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "client.hello_ack"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/EventIngested"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event.ingested"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/EventList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "events.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/StatusReport"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "system.status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/DoctorReport"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "system.doctor"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "StatusReport": {
+      "type": "object",
+      "required": [
+        "daemon",
+        "database_status",
+        "protocol_version",
+        "schema_version"
+      ],
+      "properties": {
+        "daemon": {
+          "type": "string"
+        },
+        "database_status": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "$ref": "#/definitions/ProtocolVersion"
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SyntheticEventData": {
+      "type": "object",
+      "required": [
+        "counter",
+        "label"
+      ],
+      "properties": {
+        "counter": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
