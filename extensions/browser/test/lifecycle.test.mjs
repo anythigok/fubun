@@ -98,7 +98,8 @@ function fixture({ permissions = new Set(["https://example.com/*"]), initial = [
     created: [],
     async activeTab() { return this.active; },
     async allTabs() { return this.tabs; },
-    async createTab(url) { this.created.push(url); return 42; },
+    async createPreparedTab() { this.created.push("about:blank"); return 42; },
+    async navigateTab(_tabId, url) { this.created[this.created.length - 1] = url; },
     async permissionGranted(origin) { return permissions.has(origin); },
   };
   const integration = new BrowserIntegration({
@@ -308,11 +309,13 @@ test("self-generated browser tab navigation is suppressed once and expires safel
   const entries = new Map();
   const suppression = {
     async mark(tabId, resourceId, expiresAt) { entries.set(tabId, { resourceId, expiresAt }); },
-    async consume(tabId, resourceId, now) {
+    async consume(tabId, resourceId, now, phase = "complete") {
       const entry = entries.get(tabId);
       if (entry === undefined) return false;
-      entries.delete(tabId);
-      return entry.resourceId === resourceId && entry.expiresAt >= now;
+      if (entry.resourceId !== resourceId) return false;
+      if (entry.expiresAt < now) { entries.delete(tabId); return false; }
+      if (phase === "complete") entries.delete(tabId);
+      return true;
     },
   };
   const { browser, integration, native } = fixture({ initial: [active], suppression });
@@ -332,6 +335,70 @@ test("self-generated browser tab navigation is suppressed once and expires safel
   await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false });
   assert.equal(native.calls.filter((call) => call.type === "browser.event.emit").length, 0);
   await integration.onNavigation({ id: 43, url: "https://example.com/page", incognito: false });
+  assert.equal(native.calls.filter((call) => call.type === "browser.event.emit").length, 1);
+});
+
+test("self-generated suppression is stored before a registered URL is navigated", async () => {
+  const active = await mapping();
+  const order = [];
+  const suppression = {
+    async mark() { order.push("mark"); },
+    async consume() { return true; },
+  };
+  const { browser, integration, native } = fixture({ initial: [active], suppression });
+  const prepared = browser.createPreparedTab.bind(browser);
+  browser.createPreparedTab = async () => { order.push("create"); return prepared(); };
+  browser.navigateTab = async (_tabId, url) => { order.push(`navigate:${url}`); };
+  await integration.handleActionExecute({
+    protocol_version: PROTOCOL_VERSION,
+    request_id: actionId,
+    type: "browser.action.execute",
+    payload: {
+      request_id: actionId,
+      action_execution_id: "44444444-4444-4444-8444-444444444444",
+      action: { type: "browser.tab.ensure_open.v1", resource_id: resourceId },
+      resolved_resource: { resource_id: resourceId, kind: "web.page", canonical_locator: "https://example.com/page" },
+    },
+  });
+  assert.deepEqual(order, ["create", "mark", "navigate:https://example.com/page"]);
+});
+
+test("URL and complete callbacks both consume one self-generated navigation", async () => {
+  const active = await mapping();
+  const entries = new Map([[42, { resourceId, expiresAt: 2_000 }]]);
+  const suppression = {
+    async mark(tabId, id, expiresAt) { entries.set(tabId, { resourceId: id, expiresAt }); },
+    async consume(tabId, id, now, phase = "complete") {
+      const entry = entries.get(tabId);
+      if (entry === undefined || entry.resourceId !== id || entry.expiresAt < now) return false;
+      if (phase === "complete") entries.delete(tabId);
+      return true;
+    },
+  };
+  const { integration, native } = fixture({ initial: [active], suppression });
+  native.responses.set("browser.event.emit", { event_id: actionId, stored: true, duplicate: false });
+  await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false, navigationPhase: "url" });
+  await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false, navigationPhase: "complete" });
+  assert.equal(native.calls.filter((call) => call.type === "browser.event.emit").length, 0);
+  assert.equal(entries.has(42), false);
+});
+
+test("suppression entries with a different resource are not consumed", async () => {
+  const active = await mapping();
+  const entries = new Map([[42, { resourceId: "66666666-6666-4666-8666-666666666666", expiresAt: 2_000 }]]);
+  const suppression = {
+    async mark() {},
+    async consume(tabId, id) {
+      const entry = entries.get(tabId);
+      if (entry === undefined || entry.resourceId !== id) return false;
+      entries.delete(tabId);
+      return true;
+    },
+  };
+  const { integration, native } = fixture({ initial: [active], suppression });
+  native.responses.set("browser.event.emit", { event_id: actionId, stored: true, duplicate: false });
+  await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false });
+  assert.equal(entries.has(42), true);
   assert.equal(native.calls.filter((call) => call.type === "browser.event.emit").length, 1);
 });
 

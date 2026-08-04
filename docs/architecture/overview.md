@@ -29,12 +29,20 @@ Previewと実行直前Preflightは、同じ単一Adapterのrequired executable�
 `fubun-mining`はStorageやTokioを依存しない純粋Libraryです。Coreが30日以内の
 Semantic Event、Resource、Observation Scopeを読み出して入力し、Libraryが
 `workspace-browser-start/v1`のSession、ordered Prefix、Fingerprint、Evidenceを返します。
-順序は`received_at`、同時刻はEvent IDで決定します。Workspace Anchorから10分以内の
-Browser ResourceだけをCandidateへ使い、2〜5件、support 3以上、7000 basis points以上、
-18時間span以上の条件をすべて満たした最長PrefixをWorkspaceごとに一つ選びます。
+入力は`received_at`、同時刻はEvent IDで一度だけ走査する状態機械でSessionizeします。
+そのためBrowser Eventは現在のSessionに一度だけ所属し、Anchor切替、5分Merge、30分Inactivity、
+2時間Hard Limitで境界を確定します。Workspace Anchorから10分以内のBrowser Resourceだけを
+Candidateへ使い、2〜5件、support 3以上、7000 basis points以上、18時間span以上の条件をすべて
+満たした最長PrefixをWorkspaceごとに一つ選びます。
+
+Prefix completionは各Supporting SessionのPrefix末尾Browser Eventまでの時間です。偶数件の
+`median_completion_ms`は下位中央値（`sorted[(n-1)/2]`）を使い、Session全体の終了時刻を流用しません。
+Workspace間の枠取りはsupport、action数、confidence、last_seen、fingerprintの順で行います。
 
 Discovery Run、Session、Session Event、Suggestion Evidence、Ordered Actions、Supporting
-Sessionsはv5 Migrationで保存されます。新規SuggestionはRolling 24時間で最大1件、未終端候補は最大5件です。Suggestion Acceptは一つのStorage transactionで
+Sessionsはv5 Migrationで保存されます。`sessions.anchor_event_id`はRaw Event retentionを妨げない
+Evidence文字列として保持し、`events`へのForeign Keyを持ちません。新規SuggestionはRolling 24時間で
+最大1件、`pending`だけを最大5件として数えます。Suggestion Acceptは一つのStorage transactionで
 Resource／Scopeを再検証し、未承認・DraftのBrowser Ritualだけを生成します。Scheduler、AI、
 Generic Pattern Miner、Automatic Ruleはこの層に存在しません。
 

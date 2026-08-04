@@ -4,7 +4,7 @@ import {
   isUuid,
   rejectUnknownKeys,
 } from "@fubun/protocol-ts";
-import { BrowserIntegration, BrowserTab, MappingStore, SelfGeneratedSuppressionStore } from "./integration.js";
+import { BrowserIntegration, BrowserTab, MappingStore, NavigationPhase, SelfGeneratedSuppressionStore } from "./integration.js";
 import { BrowserNativeBridge, NativePort } from "./native-bridge.js";
 
 const HOST = "dev.fubun.browser";
@@ -29,14 +29,22 @@ const suppression: SelfGeneratedSuppressionStore = {
     current[String(tabId)] = { resource_id: resourceId, expires_at: expiresAt };
     await chrome.storage.session.set({ [suppressionKey]: current });
   },
-  async consume(tabId, resourceId, now): Promise<boolean> {
+  async consume(tabId, resourceId, now, phase = "complete"): Promise<boolean> {
     const value = await chrome.storage.session.get(suppressionKey);
     const current = isSuppressionMap(value[suppressionKey]) ? value[suppressionKey] : {};
     const candidate = current[String(tabId)];
     if (candidate === undefined) return false;
-    delete current[String(tabId)];
-    await chrome.storage.session.set({ [suppressionKey]: current });
-    return candidate.resource_id === resourceId && candidate.expires_at >= now;
+    if (candidate.resource_id !== resourceId) return false;
+    if (candidate.expires_at < now) {
+      delete current[String(tabId)];
+      await chrome.storage.session.set({ [suppressionKey]: current });
+      return false;
+    }
+    if (phase === "complete") {
+      delete current[String(tabId)];
+      await chrome.storage.session.set({ [suppressionKey]: current });
+    }
+    return true;
   },
 };
 
@@ -58,9 +66,12 @@ integration = new BrowserIntegration({
         .map(tabFromChrome)
         .filter((tab): tab is BrowserTab => tab !== undefined);
     },
-    async createTab(url: string): Promise<number | undefined> {
-      const tab = await chrome.tabs.create({ url, active: true });
+    async createPreparedTab(): Promise<number | undefined> {
+      const tab = await chrome.tabs.create({ url: "about:blank", active: true });
       return tab.id;
+    },
+    async navigateTab(tabId: number, url: string): Promise<void> {
+      await chrome.tabs.update(tabId, { url });
     },
     async permissionGranted(origin: string): Promise<boolean> {
       return chrome.permissions.contains({ origins: [origin] });
@@ -159,7 +170,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" && changeInfo.url === undefined) return;
   const mapped = tabFromChrome(tab);
   if (mapped === undefined) return;
-  void integration.onNavigation({ ...mapped, id: tabId }).catch(() => undefined);
+  const navigationPhase: NavigationPhase = changeInfo.status === "complete" ? "complete" : "url";
+  void integration.onNavigation({ ...mapped, id: tabId, navigationPhase }).catch(() => undefined);
 });
 
 chrome.permissions.onRemoved.addListener((permissions) => {

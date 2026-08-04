@@ -40,8 +40,29 @@
 
 合理的仮定: Lookbackは30日、Input上限は100,000件、DiscoveryはCLI／IPC要求時だけ
 実行し、期限切れの抑止状態はListまたはRunで再調整する。新規SuggestionはRolling 24時間で
-最大1件、未終端（pending/snoozed/dismissed）の候補は最大5件、Dismissは30日抑止とする。
+最大1件、`pending`だけの候補は最大5件、Dismissは30日抑止とする。
 Scheduler、AI、汎用系列マイニングは追加しない。
+
+### Phase 4A PR #3 final hardening
+
+PR #3 head `a6cea1d3bc3f79fbde1daa0e36dc60f98dc9343c` の確認で、Anchorごとの全Event再走査により
+Browser Eventが複数Sessionへ重複所属し得た。PrefixのcompletionがSession末尾を使い、Workspace内選択後の
+Global Rankingがaction数をsupportより先に比較していた。DiscoveryのResource/Scope/Persist失敗ではRunが
+`running`のまま残り、pending capがsnoozed/dismissedも数え、v5のanchor_event_id FKがRaw Event retentionを
+阻害していた。さらにSession/Suggestion IPCが`RitualIdRequest`を流用し、Browser SuppressionはURL変更と
+completeの複数Callbackで誤消費し得た。
+
+- [x] received_at/Event ID順を一度だけ走査する状態機械へSessionizerを変更し、Session境界と一意所属を保証
+- [x] Prefix末尾Eventのcompletion、下位中央値、Workspace内最長Prefix、Global support優先Rankingを実装
+- [x] Discovery Failure Finalization、pending-only cap、v5 Anchor FK除去を実装
+- [x] `SessionIdRequest`／`SuggestionIdRequest`を追加し、Strict SchemaとCLI/Coreを分離
+- [x] Prepared Tab作成→Suppression保存→URL遷移の順序と、URL/complete両Callbackの抑止を実装
+- [x] Session Boundary、Prefix completion、Retention、Protocol ID、Suppression回帰Testを追加
+
+Phase 4Aの中央値は偶数件でも整数の下位中央値（`sorted[(n-1)/2]`）を使う。Discovery Runは開始後の
+Resource load、Scope load、Mining、Persistの各失敗で`failed`へ終端化し、公開Errorは`discovery_failed`と
+安全な固定文だけを返す。Raw Event削除後もSession summaryとSuggestion Evidenceを保持するため、
+`sessions.anchor_event_id`はUNIQUEなEvidence文字列であり、`events`への外部キーではない。
 
 ## Phase 2: explicit ritual manual execution
 

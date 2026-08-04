@@ -12,8 +12,8 @@ use fubun_protocol::{
     DoctorReport, EmptyRequest, EventIngestRequest, EventsListRequest, ExecutionIdRequest,
     ObservationListRequest, ObservationPauseRequest, RequestBody, ResourceCreateRequest,
     ResourceIdRequest, ResponsePayload, RitualActivateRequest, RitualCreateRequest,
-    RitualIdRequest, RitualUpdateRequest, SessionsListRequest, SuggestionAcceptRequest,
-    SuggestionSnoozeRequest, SuggestionsListRequest,
+    RitualIdRequest, RitualUpdateRequest, SessionIdRequest, SessionsListRequest,
+    SuggestionAcceptRequest, SuggestionIdRequest, SuggestionSnoozeRequest, SuggestionsListRequest,
 };
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
@@ -632,9 +632,7 @@ async fn session_command(socket_path: &Path, command: SessionCommand) -> Result<
     let SessionCommand::Show { session_id } = command;
     let mut client = connect(socket_path).await?;
     let payload = client
-        .request(RequestBody::SessionShow(RitualIdRequest {
-            ritual_id: session_id,
-        }))
+        .request(RequestBody::SessionShow(SessionIdRequest { session_id }))
         .await?;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
@@ -672,9 +670,9 @@ async fn suggestion_command(
 ) -> Result<(), CliError> {
     let mut client = connect(socket_path).await?;
     let body = match command {
-        SuggestionCommand::Show { suggestion_id } => RequestBody::SuggestionShow(RitualIdRequest {
-            ritual_id: suggestion_id,
-        }),
+        SuggestionCommand::Show { suggestion_id } => {
+            RequestBody::SuggestionShow(SuggestionIdRequest { suggestion_id })
+        }
         SuggestionCommand::Snooze {
             suggestion_id,
             for_duration,
@@ -683,14 +681,10 @@ async fn suggestion_command(
             for_duration,
         }),
         SuggestionCommand::Dismiss { suggestion_id } => {
-            RequestBody::SuggestionDismiss(RitualIdRequest {
-                ritual_id: suggestion_id,
-            })
+            RequestBody::SuggestionDismiss(SuggestionIdRequest { suggestion_id })
         }
         SuggestionCommand::Block { suggestion_id } => {
-            RequestBody::SuggestionBlock(RitualIdRequest {
-                ritual_id: suggestion_id,
-            })
+            RequestBody::SuggestionBlock(SuggestionIdRequest { suggestion_id })
         }
         SuggestionCommand::Accept {
             suggestion_id,

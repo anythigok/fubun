@@ -122,6 +122,11 @@ enum Operation {
     ListObservationScopes(Option<ObservationSource>),
     PauseObservationScope(Uuid),
     StartDiscoveryRun(DiscoveryRun),
+    FinishDiscoveryRunFailed {
+        run_id: Uuid,
+        failure_code: String,
+        finished_at: OffsetDateTime,
+    },
     AbortRunningDiscoveryRuns,
     PersistDiscovery {
         run: DiscoveryRun,
@@ -569,6 +574,27 @@ impl StorageHandle {
         }
     }
 
+    pub async fn finish_discovery_run_failed(
+        &self,
+        run_id: Uuid,
+        failure_code: &str,
+        finished_at: OffsetDateTime,
+    ) -> Result<(), StorageError> {
+        match self
+            .request(Operation::FinishDiscoveryRunFailed {
+                run_id,
+                failure_code: failure_code.to_owned(),
+                finished_at,
+            })
+            .await?
+        {
+            StorageResponse::Unit => Ok(()),
+            _ => Err(StorageError::InvalidData(
+                "unexpected discovery failure response".to_owned(),
+            )),
+        }
+    }
+
     pub async fn persist_discovery(
         &self,
         run: DiscoveryRun,
@@ -1000,8 +1026,7 @@ fn migrate(connection: &mut Connection) -> Result<(), StorageError> {
                 finished_at TEXT,
                 event_count INTEGER NOT NULL,
                 eligible INTEGER NOT NULL,
-                FOREIGN KEY(workspace_resource_id) REFERENCES resources(id),
-                FOREIGN KEY(anchor_event_id) REFERENCES events(id)
+                FOREIGN KEY(workspace_resource_id) REFERENCES resources(id)
             );
             CREATE TABLE session_events (
                 session_id TEXT NOT NULL,
@@ -1362,6 +1387,19 @@ fn execute_operation(
             )?;
             Ok(StorageResponse::Unit)
         }
+        Operation::FinishDiscoveryRunFailed {
+            run_id,
+            failure_code,
+            finished_at,
+        } => {
+            connection.execute(
+                "UPDATE discovery_runs
+                 SET status='failed', finished_at=?1, failure_code=?2
+                 WHERE id=?3 AND status='running'",
+                params![format_ts(finished_at)?, failure_code, run_id.to_string()],
+            )?;
+            Ok(StorageResponse::Unit)
+        }
         Operation::AbortRunningDiscoveryRuns => {
             let now = format_ts(OffsetDateTime::now_utc())?;
             connection.execute(
@@ -1406,7 +1444,7 @@ fn execute_operation(
             )?;
             let recent_cutoff = format_ts(now - time::Duration::hours(24))?;
             let mut pending_like_count: i64 = transaction.query_row(
-                "SELECT COUNT(*) FROM suggestions WHERE status IN ('pending','snoozed','dismissed')",
+                "SELECT COUNT(*) FROM suggestions WHERE status = 'pending'",
                 [],
                 |row| row.get(0),
             )?;
@@ -2972,6 +3010,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn raw_anchor_event_can_be_deleted_while_derived_evidence_remains() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        let storage = Storage::open(&path).expect("open storage");
+        let handle = storage.handle();
+        let now = OffsetDateTime::now_utc();
+        let workspace_id = Uuid::new_v4();
+        handle
+            .create_resource(Resource {
+                id: workspace_id,
+                kind: ResourceKind::Directory,
+                label: "workspace evidence".to_owned(),
+                locator: "/tmp/fubun-workspace-evidence".to_owned(),
+                canonical_locator: "/tmp/fubun-workspace-evidence".to_owned(),
+                sensitivity: Sensitivity::Normal,
+                scope: ResourceScope::Exact,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("workspace");
+        let anchor = event(Uuid::new_v4());
+        let anchor_id = anchor.id;
+        handle.insert_event(anchor).await.expect("anchor event");
+        storage.shutdown().await.expect("shutdown");
+
+        let connection = Connection::open(&path).expect("reopen database");
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .expect("foreign keys");
+        let session_id = Uuid::new_v4();
+        let suggestion_id = Uuid::new_v4();
+        let ts = format_ts(now).expect("timestamp");
+        connection
+            .execute(
+                "INSERT INTO sessions(id, algorithm_version, kind, workspace_resource_id, anchor_event_id,
+                    started_at, finished_at, event_count, eligible)
+                 VALUES (?1, 'workspace-browser-start/v1', 'workspace_start', ?2, ?3, ?4, ?4, 1, 1)",
+                params![session_id.to_string(), workspace_id.to_string(), anchor_id.to_string(), ts],
+            )
+            .expect("derived session");
+        connection
+            .execute(
+                "INSERT INTO suggestions(id, algorithm_version, workspace_resource_id, pattern_fingerprint,
+                    support_sessions, eligible_sessions, confidence_basis_points, first_seen_at, last_seen_at,
+                    observation_span_seconds, median_completion_ms, created_at, updated_at, status,
+                    snoozed_until, accepted_ritual_id)
+                 VALUES (?1, 'workspace-browser-start/v1', ?2, 'retention-fingerprint', 1, 1, 10000,
+                    ?3, ?3, 1, 1, ?3, ?3, 'pending', NULL, NULL)",
+                params![suggestion_id.to_string(), workspace_id.to_string(), ts],
+            )
+            .expect("suggestion evidence");
+        connection
+            .execute(
+                "INSERT INTO suggestion_support_sessions(suggestion_id, session_id) VALUES (?1, ?2)",
+                params![suggestion_id.to_string(), session_id.to_string()],
+            )
+            .expect("supporting session");
+        connection
+            .execute(
+                "DELETE FROM events WHERE id = ?1",
+                params![anchor_id.to_string()],
+            )
+            .expect("raw event retention delete");
+        let session_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+                params![session_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("session summary");
+        let suggestion_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM suggestions WHERE id = ?1",
+                params![suggestion_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("suggestion evidence");
+        assert_eq!(session_count, 1);
+        assert_eq!(suggestion_count, 1);
+    }
+
+    #[tokio::test]
     async fn migrates_phase_two_execution_steps_with_adapter_instance_identity() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("fubun/fubun.db");
@@ -3068,6 +3189,146 @@ mod tests {
             handle.pause_observation_scope(Uuid::new_v4()).await,
             Err(StorageError::NotFound)
         ));
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn failed_discovery_run_is_terminal_and_releases_single_flight() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        let storage = Storage::open(&path).expect("open storage");
+        let handle = storage.handle();
+        let started_at = OffsetDateTime::now_utc();
+        let run = DiscoveryRun {
+            id: Uuid::new_v4(),
+            algorithm_version: fubun_mining::ALGORITHM_VERSION.to_owned(),
+            status: DiscoveryRunStatus::Running,
+            started_at,
+            finished_at: None,
+            input_event_count: 0,
+            sessions_upserted: 0,
+            candidates_evaluated: 0,
+            suggestions_created: 0,
+            failure_code: None,
+        };
+        handle
+            .start_discovery_run(run.clone())
+            .await
+            .expect("start discovery");
+        let finished_at = started_at + time::Duration::seconds(1);
+        handle
+            .finish_discovery_run_failed(run.id, "resource_load_failed", finished_at)
+            .await
+            .expect("finish failure");
+        let stored = handle
+            .list_discovery_runs()
+            .await
+            .expect("list runs")
+            .into_iter()
+            .next()
+            .expect("stored run");
+        assert_eq!(stored.status, DiscoveryRunStatus::Failed);
+        assert_eq!(stored.failure_code.as_deref(), Some("resource_load_failed"));
+        assert_eq!(stored.finished_at, Some(finished_at));
+
+        let next = DiscoveryRun {
+            id: Uuid::new_v4(),
+            started_at: finished_at,
+            ..run
+        };
+        handle
+            .start_discovery_run(next)
+            .await
+            .expect("failed run must release single flight");
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn suggestion_cap_counts_pending_only() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        let storage = Storage::open(&path).expect("open storage");
+        let handle = storage.handle();
+        let now = OffsetDateTime::now_utc();
+        let workspace_id = Uuid::new_v4();
+        handle
+            .create_resource(Resource {
+                id: workspace_id,
+                kind: ResourceKind::Directory,
+                label: "pending cap".to_owned(),
+                locator: "/tmp/fubun-pending-cap".to_owned(),
+                canonical_locator: "/tmp/fubun-pending-cap".to_owned(),
+                sensitivity: Sensitivity::Normal,
+                scope: ResourceScope::Exact,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("workspace");
+        storage.shutdown().await.expect("shutdown");
+
+        let connection = Connection::open(&path).expect("database");
+        let old = format_ts(now - time::Duration::days(2)).expect("old timestamp");
+        let future = format_ts(now + time::Duration::days(7)).expect("future timestamp");
+        for index in 0..14 {
+            let status = if index < 4 { "pending" } else { "snoozed" };
+            let snoozed_until = if status == "snoozed" {
+                Some(future.as_str())
+            } else {
+                None
+            };
+            connection
+                .execute(
+                    "INSERT INTO suggestions(id, algorithm_version, workspace_resource_id, pattern_fingerprint,
+                        support_sessions, eligible_sessions, confidence_basis_points, first_seen_at, last_seen_at,
+                        observation_span_seconds, median_completion_ms, created_at, updated_at, status,
+                        snoozed_until, accepted_ritual_id)
+                     VALUES (?1, 'workspace-browser-start/v1', ?2, ?3, 3, 3, 10000, ?4, ?4, 64800, 1000, ?4, ?4, ?5, ?6, NULL)",
+                    params![Uuid::new_v4().to_string(), workspace_id.to_string(), format!("old-{index}"), old, status, snoozed_until],
+                )
+                .expect("seed suggestion state");
+        }
+        drop(connection);
+
+        let storage = Storage::open(&path).expect("reopen storage");
+        let handle = storage.handle();
+        let run = DiscoveryRun {
+            id: Uuid::new_v4(),
+            algorithm_version: fubun_mining::ALGORITHM_VERSION.to_owned(),
+            status: DiscoveryRunStatus::Running,
+            started_at: now,
+            finished_at: None,
+            input_event_count: 0,
+            sessions_upserted: 0,
+            candidates_evaluated: 1,
+            suggestions_created: 0,
+            failure_code: None,
+        };
+        handle.start_discovery_run(run.clone()).await.expect("run");
+        let suggestion = DiscoveredSuggestion {
+            id: Uuid::new_v4(),
+            algorithm_version: fubun_mining::ALGORITHM_VERSION.to_owned(),
+            workspace_resource_id: workspace_id,
+            pattern_fingerprint: "new-pending".to_owned(),
+            action_resource_ids: vec![workspace_id],
+            supporting_session_ids: Vec::new(),
+            support_sessions: 3,
+            eligible_sessions: 3,
+            confidence_basis_points: 10_000,
+            first_seen_at: now,
+            last_seen_at: now,
+            observation_span_seconds: 64800,
+            median_completion_ms: 1000,
+        };
+        handle
+            .persist_discovery(run, Vec::new(), vec![suggestion])
+            .await
+            .expect("new pending suggestion");
+        let pending = handle
+            .list_suggestions(Some(SuggestionStatus::Pending), None)
+            .await
+            .expect("pending list");
+        assert_eq!(pending.len(), 5);
         storage.shutdown().await.expect("shutdown");
     }
 

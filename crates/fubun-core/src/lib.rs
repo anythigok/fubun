@@ -562,7 +562,7 @@ async fn process_request(
                 Err(error) => storage_error(id, error),
             }
         }
-        RequestBody::SessionShow(payload) => match storage.get_session(payload.ritual_id).await {
+        RequestBody::SessionShow(payload) => match storage.get_session(payload.session_id).await {
             Ok(session) => ResponseEnvelope::ok(
                 id,
                 ResponsePayload::SessionShow(fubun_protocol::SessionShow { session }),
@@ -583,7 +583,7 @@ async fn process_request(
             Err(error) => storage_error(id, error),
         },
         RequestBody::SuggestionShow(payload) => match storage
-            .get_suggestion(payload.ritual_id)
+            .get_suggestion(payload.suggestion_id)
             .await
         {
             Ok((suggestion, status, snoozed_until, accepted_ritual_id)) => ResponseEnvelope::ok(
@@ -610,7 +610,7 @@ async fn process_request(
         RequestBody::SuggestionDismiss(payload) => {
             suggestion_state_response(
                 id,
-                payload.ritual_id,
+                payload.suggestion_id,
                 SuggestionStatus::Dismissed,
                 Some(OffsetDateTime::now_utc() + time::Duration::days(30)),
                 storage,
@@ -620,7 +620,7 @@ async fn process_request(
         RequestBody::SuggestionBlock(payload) => {
             suggestion_state_response(
                 id,
-                payload.ritual_id,
+                payload.suggestion_id,
                 SuggestionStatus::Blocked,
                 None,
                 storage,
@@ -667,11 +667,15 @@ async fn discovery_run_response(id: Uuid, storage: &StorageHandle) -> ResponseEn
     }
     let resources = match storage.list_resources().await {
         Ok(resources) => resources,
-        Err(error) => return storage_error(id, error),
+        Err(_error) => {
+            return finish_failed_discovery(id, storage, run_id, "resource_load_failed").await
+        }
     };
     let scopes = match storage.list_observation_scopes(None).await {
         Ok(scopes) => scopes,
-        Err(error) => return storage_error(id, error),
+        Err(_error) => {
+            return finish_failed_discovery(id, storage, run_id, "scope_load_failed").await
+        }
     };
     let output = fubun_mining::discover(DiscoveryInput {
         events,
@@ -688,8 +692,22 @@ async fn discovery_run_response(id: Uuid, storage: &StorageHandle) -> ResponseEn
             id,
             ResponsePayload::DiscoveryRun(fubun_protocol::DiscoveryRunReport { run }),
         ),
-        Err(error) => storage_error(id, error),
+        Err(_error) => finish_failed_discovery(id, storage, run_id, "persistence_failed").await,
     }
+}
+
+async fn finish_failed_discovery(
+    request_id: Uuid,
+    storage: &StorageHandle,
+    run_id: Uuid,
+    failure_code: &str,
+) -> ResponseEnvelope {
+    // Finalization is best effort, but is attempted before returning the
+    // public error so a failed request can never strand a run as `running`.
+    let _ = storage
+        .finish_discovery_run_failed(run_id, failure_code, OffsetDateTime::now_utc())
+        .await;
+    ResponseEnvelope::error(request_id, "discovery_failed", "discovery run failed")
 }
 
 async fn discovery_status_response(id: Uuid, storage: &StorageHandle) -> ResponseEnvelope {

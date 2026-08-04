@@ -250,6 +250,18 @@ pub struct RitualIdRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SessionIdRequest {
+    pub session_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionIdRequest {
+    pub suggestion_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RitualCreateRequest {
     pub definition: RitualDefinition,
 }
@@ -420,17 +432,17 @@ pub enum RequestBody {
     #[serde(rename = "sessions.list")]
     SessionsList(SessionsListRequest),
     #[serde(rename = "session.show")]
-    SessionShow(RitualIdRequest),
+    SessionShow(SessionIdRequest),
     #[serde(rename = "suggestions.list")]
     SuggestionsList(SuggestionsListRequest),
     #[serde(rename = "suggestion.show")]
-    SuggestionShow(RitualIdRequest),
+    SuggestionShow(SuggestionIdRequest),
     #[serde(rename = "suggestion.snooze")]
     SuggestionSnooze(SuggestionSnoozeRequest),
     #[serde(rename = "suggestion.dismiss")]
-    SuggestionDismiss(RitualIdRequest),
+    SuggestionDismiss(SuggestionIdRequest),
     #[serde(rename = "suggestion.block")]
-    SuggestionBlock(RitualIdRequest),
+    SuggestionBlock(SuggestionIdRequest),
     #[serde(rename = "suggestion.accept")]
     SuggestionAccept(SuggestionAcceptRequest),
 }
@@ -812,5 +824,28 @@ mod tests {
         let oversized = "x".repeat(MAX_MESSAGE_SIZE + 1);
         let error = encode_json_frame(&oversized).expect_err("payload must be rejected");
         assert!(matches!(error, FrameError::Oversized { .. }));
+    }
+
+    #[test]
+    fn discovery_ids_are_strictly_separate_from_ritual_ids() {
+        let session_json = r#"{"protocol_version":{"major":1,"minor":0},"request_id":"00000000-0000-0000-0000-000000000000","body":{"method":"session.show","params":{"session_id":"11111111-1111-4111-8111-111111111111"}}}"#.to_string();
+        let envelope: RequestEnvelope = serde_json::from_str(&session_json).expect("session id");
+        assert!(matches!(
+            envelope.body,
+            RequestBody::SessionShow(SessionIdRequest { .. })
+        ));
+
+        let wrong_field = session_json.replace("session_id", "ritual_id");
+        assert!(serde_json::from_str::<RequestEnvelope>(&wrong_field).is_err());
+
+        let suggestion_json = session_json
+            .replace("session.show", "suggestion.dismiss")
+            .replace("session_id", "suggestion_id");
+        let suggestion: RequestEnvelope =
+            serde_json::from_str(&suggestion_json).expect("suggestion id");
+        assert!(matches!(
+            suggestion.body,
+            RequestBody::SuggestionDismiss(SuggestionIdRequest { .. })
+        ));
     }
 }

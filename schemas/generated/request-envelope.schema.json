@@ -1077,7 +1077,7 @@
               ]
             },
             "params": {
-              "$ref": "#/definitions/RitualIdRequest"
+              "$ref": "#/definitions/SessionIdRequest"
             }
           }
         },
@@ -1113,7 +1113,7 @@
               ]
             },
             "params": {
-              "$ref": "#/definitions/RitualIdRequest"
+              "$ref": "#/definitions/SuggestionIdRequest"
             }
           }
         },
@@ -1149,7 +1149,7 @@
               ]
             },
             "params": {
-              "$ref": "#/definitions/RitualIdRequest"
+              "$ref": "#/definitions/SuggestionIdRequest"
             }
           }
         },
@@ -1167,7 +1167,7 @@
               ]
             },
             "params": {
-              "$ref": "#/definitions/RitualIdRequest"
+              "$ref": "#/definitions/SuggestionIdRequest"
             }
           }
         },
@@ -1339,6 +1339,19 @@
         "sensitive"
       ]
     },
+    "SessionIdRequest": {
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
     "SessionsListRequest": {
       "type": "object",
       "properties": {
@@ -1366,6 +1379,19 @@
             "null"
           ]
         },
+        "suggestion_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionIdRequest": {
+      "type": "object",
+      "required": [
+        "suggestion_id"
+      ],
+      "properties": {
         "suggestion_id": {
           "type": "string",
           "format": "uuid"

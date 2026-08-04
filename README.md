@@ -33,7 +33,9 @@ Phase 4Aは、明示的に観察中のVS Code WorkspaceをAnchorに、開始か�
 `workspace-browser-start/v1`一種類で、Generic n-gram、AI、Scheduler、Rule、自動実行は
 ありません。Raw URL、Workspace Path、本文、Title、Query、FragmentはSession／Evidenceへ
 保存せず、Resource IDとラベルだけで説明します。新規SuggestionはRolling 24時間で最大1件、
-未終端の候補は最大5件、Dismissは30日間抑止します。
+`pending`だけの候補は最大5件、Dismissは30日間抑止します。Sessionizeはreceived_at（同時刻は
+Event ID）の一方向走査、Candidate completionはPrefix末尾Event、偶数件Medianは下位中央値です。
+Workspace内では最長Prefixを選び、日次枠のGlobal Rankingはsupportを最優先します。
 
 ```text
 fubun discovery run

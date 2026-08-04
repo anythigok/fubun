@@ -35,8 +35,13 @@
 - Phase 3ではPattern Miner、Suggestion、Rule、Automatic Triggerを追加しない。
 - Phase 4AのMiningは`workspace-browser-start/v1`だけで、actor=userのAnchorとActionだけを扱う。
 - received_atをSession順序の正本とし、Synthetic、Fubun自身のTab、非Active ScopeをMiningしない。
+- Sessionizerは入力を一度だけ走査し、Browser Eventを最大一つのSessionへ割り当てる。
 - Prefix Candidateは2〜5件、support 3以上、confidence 7000以上、18時間span以上に限定する。
+- Prefix completionは末尾Action Event、偶数Medianは下位中央値、Global Rankingはsupport優先とする。
 - FingerprintはVersionとResource IDだけから生成し、Raw URL／PathをEvidenceへ保存しない。
 - Suggestion AcceptはApprovalなしのDraft Ritualだけを作り、Rule・Scheduler・自動実行へ変換しない。
 - Discovery RunはCLI／IPC要求時だけ実行し、Single Flightと30日／100000件上限を維持する。
+- Suggestion上限はstatus=pendingだけを数え、失敗Runをrunningのまま残さない。
+- sessions.anchor_event_idはRaw Event retentionを妨げるForeign Keyにしない。
+- session.showはsession_id、suggestion系のID操作はsuggestion_idを使い、RitualIdRequestを流用しない。
 - Fubun生成Browser TabはEphemeralな最大60秒Suppress状態で一度だけ除外し、Tab IDを永続化しない。
