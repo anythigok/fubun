@@ -59,8 +59,11 @@ observe?.addEventListener("click", () => {
 });
 
 stop?.addEventListener("click", () => {
-  void chrome.runtime.sendMessage({ type: "stop" }).then(() => show("Observation paused")).catch(() => show("Unable to pause observation"));
-  void refresh();
+  void chrome.runtime.sendMessage({ type: "stop" }).then((result: unknown) => {
+    const ok = typeof result === "object" && result !== null && (result as { ok?: boolean }).ok === true;
+    show(ok ? "Observation paused" : "Observation is locally paused; Core sync is pending");
+    return refresh();
+  }).catch(() => show("Observation is locally paused; Core sync is pending"));
 });
 
 show("Native host status is checked on demand");

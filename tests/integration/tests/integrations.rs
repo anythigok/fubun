@@ -1,12 +1,15 @@
 use std::time::Duration;
 
 use fubun_core::{paths::FubunPaths, start_server, FubunClient};
-use fubun_domain::{EventData, EventType, ObservationSource, ObservationStatus};
+use fubun_domain::{
+    Actor, AdapterIdentity, Event, EventData, EventType, ObservationSource, ObservationStatus,
+    PrivacyClass, EVENT_SPEC_VERSION,
+};
 use fubun_protocol::{
     read_json_frame, write_json_frame, AdapterEventAck, AdapterEventEmitRequest, AdapterHello,
     AdapterRequestBody, AdapterRequestEnvelope, AdapterResponseBody, AdapterResponseEnvelope,
-    AdapterStatusSnapshot, BrowserObservationEnableRequest, ClientHelloAck, RequestBody,
-    ResponseBody, ResponseEnvelope, ResponsePayload, CURRENT_PROTOCOL_VERSION,
+    AdapterStatusSnapshot, BrowserObservationEnableRequest, ClientHelloAck, EventIngestRequest,
+    RequestBody, ResponseBody, ResponseEnvelope, ResponsePayload, CURRENT_PROTOCOL_VERSION,
 };
 use tempfile::TempDir;
 use time::OffsetDateTime;
@@ -53,6 +56,90 @@ async fn browser_adapter(paths: &FubunPaths, resource_id: Uuid) -> (UnixStream, 
         ResponseBody::Ok(ResponsePayload::AdapterHelloAck(ClientHelloAck { .. }))
     ));
     (stream, instance_id)
+}
+
+fn client_semantic_event(event_type: EventType, data: EventData) -> Event {
+    Event {
+        spec_version: EVENT_SPEC_VERSION.to_owned(),
+        id: Uuid::new_v4(),
+        event_type,
+        source: "client-controlled".to_owned(),
+        occurred_at: OffsetDateTime::now_utc(),
+        received_at: OffsetDateTime::now_utc(),
+        actor: Actor::User,
+        adapter: AdapterIdentity {
+            id: "client-controlled".to_owned(),
+            version: "test".to_owned(),
+            instance_id: Uuid::new_v4(),
+            sequence_no: 1,
+        },
+        context: None,
+        privacy: PrivacyClass::Normal,
+        data,
+    }
+}
+
+#[tokio::test]
+async fn client_event_ingest_rejects_semantic_event_spoofing_but_keeps_synthetic_fixture_support() {
+    let temp = TempDir::new().expect("temp");
+    let paths = paths(&temp);
+    let server = start_server(paths.clone()).await.expect("server");
+    let mut client = FubunClient::connect(&paths.socket_path, "integration", "test")
+        .await
+        .expect("client");
+    for (event_type, data) in [
+        (
+            EventType::BrowserResourceOpenedV1,
+            EventData::BrowserResourceOpened {
+                resource_id: Uuid::new_v4(),
+            },
+        ),
+        (
+            EventType::VscodeWorkspaceOpenedV1,
+            EventData::VscodeWorkspaceOpened {
+                resource_id: Uuid::new_v4(),
+            },
+        ),
+    ] {
+        let error = client
+            .request(RequestBody::EventIngest(EventIngestRequest {
+                event: client_semantic_event(event_type, data),
+            }))
+            .await
+            .expect_err("client semantic event must be rejected");
+        assert!(
+            matches!(error, fubun_core::ClientError::Rejected { code, .. } if code == "invalid_event")
+        );
+    }
+    let synthetic = Event {
+        spec_version: EVENT_SPEC_VERSION.to_owned(),
+        id: Uuid::new_v4(),
+        event_type: EventType::SyntheticV1,
+        source: "dev.fixture".to_owned(),
+        occurred_at: OffsetDateTime::now_utc(),
+        received_at: OffsetDateTime::now_utc(),
+        actor: Actor::User,
+        adapter: AdapterIdentity {
+            id: "dev.fixture".to_owned(),
+            version: "test".to_owned(),
+            instance_id: Uuid::new_v4(),
+            sequence_no: 1,
+        },
+        context: None,
+        privacy: PrivacyClass::Normal,
+        data: EventData::Synthetic {
+            label: "fixture".to_owned(),
+            counter: 1,
+        },
+    };
+    let response = client
+        .request(RequestBody::EventIngest(EventIngestRequest {
+            event: synthetic,
+        }))
+        .await
+        .expect("synthetic fixture remains supported");
+    assert!(matches!(response, ResponsePayload::EventIngested(_)));
+    server.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]

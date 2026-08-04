@@ -549,6 +549,19 @@ async fn ingest_response(
     mut event: fubun_domain::Event,
     storage: &StorageHandle,
 ) -> ResponseEnvelope {
+    // `event.ingest` is deliberately retained for the Phase 1 development
+    // fixture only. Semantic events are constructed exclusively from an
+    // authenticated Adapter Event Emit connection below, so a regular client
+    // cannot choose their actor, source, adapter identity, or scope bypass.
+    if event.event_type != EventType::SyntheticV1
+        || !matches!(&event.data, EventData::Synthetic { .. })
+    {
+        return ResponseEnvelope::error(
+            id,
+            "invalid_event",
+            "client event ingest only accepts dev synthetic events",
+        );
+    }
     event.received_at = OffsetDateTime::now_utc();
     if let Err(error) = event.validate() {
         return ResponseEnvelope::error(id, "invalid_event", error.to_string());

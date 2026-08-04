@@ -80,7 +80,7 @@ Native Host stdoutは32-bit native-endian frame以外を書きません。0長�
 
 ### Browser Permission Revocation / Stale Resource Mapping
 
-Permission解除を検出したExtensionはMappingをinactiveとして削除し、Scope Pauseを要求してNative Portを再接続します。Browser Adapterの新Instanceは許可済みResource ID snapshotを再宣言し、Coreは同一Instance内のPermission、Capability、Resource状態を同時に満たす場合だけAction/Eventを受け付けます。
+Permission解除を検出したExtensionは、まずLocal Mappingをinactive/pause pendingへ永続化してEvent対象から外します。その後に各Core Scope Pauseを試行し、成功したMappingだけを削除します。Core不達時もLocal Event送信は再開せず、Storage更新が完了してからNative Portを再接続します。Service Worker起動時はPermissionを再照合し、残ったpause pending Scopeを一度だけ再同期します。Browser Adapterの新Instanceは許可済みResource ID snapshotを再宣言し、Coreは同一Instance内のPermission、Capability、Resource状態を同時に満たす場合だけAction/Eventを受け付けます。
 
 ### Raw URL Leakage / Query Token Leakage / Incognito Leakage
 
@@ -104,7 +104,11 @@ StorageにはResource ID、Scope ID、canonical hash、origin pattern、label、
 
 ### Native Host Disconnect / Service Worker Restart / Reconnect Storm
 
-Native Port切断時はpending操作を失敗させ、指数Backoff（上限30秒）で接続を一度だけ再試行します。Service WorkerはStorageからMappingを復元し、global stateだけを正本にしません。Core側のPending RequestはAdapter Disconnect、Timeout、Shutdownで解放されます。
+Native Port切断時はPending Native Requestをすべてrejectし、指数Backoff（上限30秒）で接続を一度だけ再試行します。Native HostのCore Adapter streamはReaderを一つに固定し、Event Ackをrequest ID別に配送するため、Action ExecuteがAckより先に到着しても誤配送しません。Service WorkerはStorageからMappingを復元し、global stateだけを正本にしません。Core側のPending RequestはAdapter Disconnect、Timeout、Shutdownで解放されます。
+
+### Semantic Event Injection / VS Code Adapter Session
+
+通常Clientの`event.ingest`は開発用Synthetic Eventだけを許可し、Browser/VS CodeのSemantic Eventを受理しません。Semantic EventはAdapter Helloの固定ID/Event Capability、Resource kind、Active Scope、Browser Permission snapshotを検証した後にCoreが構築します。VS Code Event-only AdapterはEventごとの短命接続を使わず、Extension activation中の長時間UDS sessionでHello、Event Ack、request ID、protocol version、bounded frameを検証します。切断時はPending Eventを解放し、観察対象がない場合は再接続しません。
 
 ## Out of scope
 

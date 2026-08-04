@@ -26,5 +26,10 @@
 - Host Permissionはユーザー操作で許可されたOriginだけに限定し、Native Host `allowed_origins`へWildcardを置かない。
 - Native HostのstdoutはProtocol frame専用とし、診断はstderrだけへ出す。
 - Adapter EventはCoreがactor、source、received_at、identityを組み立て、Active Observation Scopeなしで保存しない。
+- 通常Clientの`event.ingest`は開発用Synthetic Eventだけとし、Browser/VS CodeのSemantic Eventを受理しない。
+- Native HostのAdapter UDSは単一Readerと単一Writer queueで扱い、Event AckとAction Executeをrequest_idで多重化する。
+- Browser ScopeのEnableはCore Ack後だけを成功扱いし、Pause/Permission解除はLocal Event送信を先に停止してからCoreへ同期する。
+- Browser/VS Code Adapter Instance内のEvent sequenceは単調増加にし、日時値や乱数をsequenceとして使わない。
+- VS Code Event-only Adapterは観察中に長時間接続を再利用し、Hello/Event Ack/Protocol Versionを厳格検証する。
 - VS Codeから本文、現在ファイル名、Terminal、Git差分、Workspace Settingsを取得しない。Remote、Multi-root、Virtual Workspaceは非対応とする。
 - Phase 3ではPattern Miner、Suggestion、Rule、Automatic Triggerを追加しない。

@@ -1,5 +1,6 @@
 export const MAX_MESSAGE_SIZE = 256 * 1024;
 export const PROTOCOL_VERSION = { major: 1, minor: 0 } as const;
+export const BROWSER_MAPPING_SCHEMA_VERSION = "dev.fubun.browser-mapping/1";
 
 export type ProtocolVersion = Readonly<typeof PROTOCOL_VERSION>;
 export type EventType =
@@ -20,6 +21,7 @@ export interface BrowserResourceMapping {
   origin_pattern: string;
   label: string;
   schema_version: string;
+  state?: "active" | "inactive" | "pause_pending";
 }
 
 const forbiddenControl = /[\u0000-\u001f\u007f]/u;
@@ -84,6 +86,29 @@ export function isKnownNativeType(value: string): boolean {
     "integration.pong",
     "integration.error",
   ].includes(value);
+}
+
+export function isUuid(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value);
+}
+
+export function parseNativeEnvelope(value: unknown): NativeEnvelope<unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("native envelope must be an object");
+  const record = value as Record<string, unknown>;
+  rejectUnknownKeys(record, ["protocol_version", "request_id", "type", "payload"]);
+  const version = record.protocol_version;
+  if (typeof version !== "object" || version === null || Array.isArray(version)) throw new Error("invalid protocol version");
+  const versionRecord = version as Record<string, unknown>;
+  rejectUnknownKeys(versionRecord, ["major", "minor"]);
+  if (versionRecord.major !== PROTOCOL_VERSION.major || versionRecord.minor !== PROTOCOL_VERSION.minor) throw new Error("native protocol mismatch");
+  if (!isUuid(record.request_id) || typeof record.type !== "string" || !isKnownNativeType(record.type)) throw new Error("invalid native envelope");
+  return {
+    protocol_version: PROTOCOL_VERSION,
+    request_id: record.request_id,
+    type: record.type,
+    payload: record.payload,
+  };
 }
 
 export function rejectUnknownKeys(value: Record<string, unknown>, keys: readonly string[]): void {

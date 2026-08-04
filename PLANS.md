@@ -116,3 +116,14 @@ Head `776d4c82aad646665d40d7a49cf26ab6426b9d63` を確認した時点で、Previ
 
 - Phase 4のSessionizer、Pattern Miner、Suggestion、Evidence、Dismissal/Snooze、SuggestionからのRitual Draft生成。
 - Firefox、Marketplace公開、Chrome実体のCI起動、Cross-platform Adapter、GUI、Performance tuning、複数Extension IDを跨ぐ高度なManifest管理。
+
+### Phase 3 PR #2 final hardening
+
+PR #2 head `27e1f5d43d9a092054b02c0970d7603a7c89e3c2` の再現確認では、通常Clientの`event.ingest`が完全な`Event`を受理するためBrowser/VS Code semantic eventを偽装できた。Native HostはEvent Emit後にAdapter socketを直接readして次のframeをEvent Ackと仮定しており、Action Executeとの逆順到着を処理できなかった。Browser ExtensionはCore Ack前にenableを成功扱いし、pauseやpermission removalでCore Scopeの状態確認前に再接続し、`Date.now()`をsequenceとしていた。Browser ActionはActionとResolved ResourceのID一致を確認せず、VS CodeはEventごとに短命Adapter connectionを作りHello/Event Ackを厳格検証していなかった。Browser/VS Codeの実行可能なLifecycle testも不足していた。
+
+- [x] Client `event.ingest`をSynthetic Event専用に制限し、semantic eventはAdapter Event EmitだけでCoreが組み立てる
+- [x] Native HostのAdapter streamを単一Reader、単一Writer queue、request_id別Pending Event Ackへ分離
+- [x] Browser NativeBridgeの相関Request Manager、Observation enable/pause state machine、permission reconciliation、単調sequenceを追加
+- [x] Browser Action envelopeのResource ID一致とstrict payload検証を追加
+- [x] VS Codeの永続Event-only Adapter sessionとstrict framed response検証を追加
+- [x] Browser/Native Host/VS Codeの実行可能なUnit/Integration regressionを追加

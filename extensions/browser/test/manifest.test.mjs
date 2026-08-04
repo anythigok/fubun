@@ -12,7 +12,12 @@ test("manifest keeps permissions narrow", async () => {
 });
 
 test("browser sources keep raw locations and forbidden APIs out of storage", async () => {
-  const source = await readFile(new URL("../src/service-worker.ts", import.meta.url), "utf8");
+  const sources = await Promise.all([
+    "service-worker.ts",
+    "integration.ts",
+    "native-bridge.ts",
+  ].map((name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8")));
+  const source = sources.join("\n");
   assert.equal(/chrome\.scripting|chrome\.cookies|chrome\.history|chrome\.webRequest|content_scripts/.test(source), false);
   assert.equal(/storage\.sync|tab\.title|favicon|clipboard/.test(source), false);
   assert.match(source, /canonical_url_hash/);

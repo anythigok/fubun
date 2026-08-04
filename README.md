@@ -16,9 +16,13 @@ Phase 2は、ユーザーが明示的に作成したRitualをPreview、Approval�
 - Preview、Preflight、Dispatchは同じ単一Adapter InstanceのCapability・固定Tool・Desktop Entryを確認し、timeout/disconnect/protocol errorでも選択済みAdapterのIdentityを履歴へ残す。
 - 終端したExecutionにはpending/running Stepを残さず、失敗後に未実行だったStepはabortedとして記録する。
 - Browser/VS Code Eventは、Coreでactor、source、adapter identity、received_atを組み立て、Active Observation Scopeがある場合だけ保存する。
+- 通常Clientの`event.ingest`は開発用Synthetic Eventだけを許可し、Browser/VS Code Semantic EventはAdapter Event Emit経路からしか保存できない。
 - Browser Resourceはhttp/httpsだけを受け付け、query、fragment、userinfo、raw URL/PathをEventやExtension Storageへ保存しない。
 - Browser Actionは登録済みResource IDだけを受け取り、Native Messaging経由で許可済み同一Originのタブだけを開く。
 - Native HostのstdoutはNative Messaging frame専用で、許可Originは明示的なExtension IDだけに限定する。
+- Native HostはAdapter UDSのReaderを一つに固定し、Event Ackをrequest_idで配送するため、Action ExecuteとAckの到着順に依存しない。
+- BrowserのEnableはCore AckとPermission再確認後にだけLocal Mappingを保存する。Stop/Permission解除時は先にLocal Event送信を停止し、Core Pause失敗時もinactive状態を維持する。
+- Browser/VS Code Event sequenceはAdapter Instanceごとに単調増加し、日時値をsequenceとして使わない。VS Codeは観察中のEvent-only Adapter接続を再利用する。
 - VS Code連携はLocal、file scheme、single-folder workspaceだけを対象にし、本文、ファイル名、Terminal、Git差分を取得しない。
 - data directoryは0700、databaseとsocketは0600。
 
@@ -157,7 +161,7 @@ cargo run -p fubun-cli -- browser host install --browser chrome \
 cargo run -p fubun-cli -- browser host status
 ```
 
-Extension Popupの「このページを観察する」はユーザーのClick Handler内でOrigin permissionを要求します。許可後にCoreへWeb Page ResourceとActive Scopeを登録し、canonical URL hashとResource IDだけをExtension Storageへ保存します。停止は「このページの観察を停止」またはPermission解除で行えます。
+Extension Popupの「このページを観察する」はユーザーのClick Handler内でOrigin permissionを要求します。許可後もCoreの`browser.observation.enabled`応答とPermission再確認が成功するまで登録成功とは表示せず、成功時だけcanonical URL hashとResource IDをExtension Storageへ保存します。停止またはPermission解除はLocal Event送信を即時停止してからCore Scope Pauseを同期します。Coreが一時的に不達でもLocal Mappingを再びactiveにはせず、次回Service Worker起動時にpending Pauseを一度だけ再同期します。
 
 ```bash
 fubun observations list --source browser.chromium
@@ -181,7 +185,7 @@ pnpm --filter fubun-vscode-extension package
 code --install-extension artifacts/fubun-vscode-extension.vsix
 ```
 
-VS Codeで「Fubun: Observe Current Workspace」を明示実行すると、Localかつfile schemeのsingle-folder workspaceだけが登録されます。globalStateにはResource ID、Scope ID、canonical hashだけを保存します。Multi-root、Remote、Virtual、Untitled workspaceは状態表示だけで、Eventを送りません。
+VS Codeで「Fubun: Observe Current Workspace」を明示実行すると、Localかつfile schemeのsingle-folder workspaceだけが登録されます。globalStateにはResource ID、Scope ID、canonical hashだけを保存します。観察中はEvent-only Adapterを長時間接続し、Hello、Event Ack、request ID、protocol versionを検証して同じAdapter Instance内で単調なsequenceを送ります。Multi-root、Remote、Virtual、Untitled workspaceは状態表示だけで、Eventを送りません。
 
 ```bash
 fubun observations list --source vscode.workspace

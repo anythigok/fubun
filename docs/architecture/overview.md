@@ -30,12 +30,12 @@ BrowserページまたはVS Code Workspaceは、ユーザーが明示的にEnabl
 
 Browser Resourceは`http`/`https`のcanonical URLだけを保持します。userinfo、query、fragment、default portを除去し、空Pathを`/`へ正規化した文字列からSHA-256を計算します。URLはEventやログへ複製せず、Browser ActionはResource IDだけを受け取ります。
 
-Adapter Helloは固定Adapter RegistryとAction/Event Capabilityを検証します。VS CodeはAction CapabilityなしのEvent-only Adapterとして登録できます。Browser Adapterの`permitted_resource_ids`は同一Adapter InstanceのStatus snapshotに紐づき、Coreは別InstanceのPermissionやCapabilityを合成しません。Browser Enable後やPermission解除後はExtensionがPortを再接続し、新しいInstanceでStatusを更新します。
+Adapter Helloは固定Adapter RegistryとAction/Event Capabilityを検証します。通常Clientの`event.ingest`は開発用Synthetic Eventに限り、Browser/VS Code Semantic EventはAdapter Event EmitでのみCoreがactor、source、received_at、adapter identityを確定して保存します。VS CodeはAction CapabilityなしのEvent-only Adapterとして登録できます。Browser Adapterの`permitted_resource_ids`は同一Adapter InstanceのStatus snapshotに紐づき、Coreは別InstanceのPermissionやCapabilityを合成しません。Browser Enable後やPermission解除後はExtensionがPortを再接続し、新しいInstanceでStatusを更新します。
 
 ## Native Messaging bridge
 
-Chrome/ChromiumからNative Hostへは標準の32-bit native-endian length framing、HostからCoreへは既存4-byte little-endian framingを使います。Native Hostは最初のcaller originとstrict `extension.hello`を検証し、設定ファイルに明示されたExtension IDだけを許可します。stdoutはNative Messaging frame専用、診断はstderrだけです。Native HostはShell、任意Executable、Network APIを持たず、Browser API呼出しはExtensionへAction Requestとして渡します。
+Chrome/ChromiumからNative Hostへは標準の32-bit native-endian length framing、HostからCoreへは既存4-byte little-endian framingを使います。Native Hostは最初のcaller originとstrict `extension.hello`を検証し、設定ファイルに明示されたExtension IDだけを許可します。Adapter socketは単一Reader taskと単一Writer queueへ分離し、Readerが`event.ack`をrequest ID別Pending mapへ、`action.execute`をExtension outbound queueへ配送します。したがってEvent AckとAction Executeは到着順に依存せず、timeout/disconnect/cancelはPending mapを解放します。stdoutはNative Messaging frame専用、診断はstderrだけです。Native HostはShell、任意Executable、Network APIを持たず、Browser API呼出しはExtensionへAction Requestとして渡します。
 
 ## VS Code boundary
 
-VS Code Extensionは`extensionKind: ["ui"]`で、Local/file scheme/single-folder workspaceだけを対象にします。realpathとcanonical hashは一時的にCoreへ渡しますが、globalStateとEventにはResource ID、Scope ID、hashだけを保存します。Remote、Multi-root、Virtual、Untitled workspaceではEventを生成しません。
+VS Code Extensionは`extensionKind: ["ui"]`で、Local/file scheme/single-folder workspaceだけを対象にします。realpathとcanonical hashは一時的にCoreへ渡しますが、globalStateとEventにはResource ID、Scope ID、hashだけを保存します。観察中は一つのEvent-only Adapter Sessionを再利用し、stable instance ID、単調sequence、strict Hello/Event Ack/request ID/protocol検証、bounded reconnect backoffを持ちます。Remote、Multi-root、Virtual、Untitled workspaceではEventを生成しません。
