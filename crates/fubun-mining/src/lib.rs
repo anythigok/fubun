@@ -408,6 +408,7 @@ pub fn fingerprint(workspace: Uuid, actions: &[Uuid]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fubun_domain::{AdapterIdentity, PrivacyClass, ResourceScope, Sensitivity};
 
     #[test]
     fn fingerprint_is_stable_and_order_sensitive() {
@@ -422,5 +423,127 @@ mod tests {
             fingerprint(workspace, &[a, b]),
             fingerprint(workspace, &[b, a])
         );
+    }
+
+    #[test]
+    fn three_spread_workspace_starts_produce_one_prefix_suggestion() {
+        let workspace = Uuid::from_u128(10);
+        let browser_a = Uuid::from_u128(11);
+        let browser_b = Uuid::from_u128(12);
+        let base = OffsetDateTime::UNIX_EPOCH;
+        let resources = [
+            resource(workspace, ResourceKind::Directory),
+            resource(browser_a, ResourceKind::WebPage),
+            resource(browser_b, ResourceKind::WebPage),
+        ];
+        let scopes = [
+            scope(workspace, ObservationSource::VscodeWorkspace),
+            scope(browser_a, ObservationSource::BrowserChromium),
+            scope(browser_b, ObservationSource::BrowserChromium),
+        ];
+        let mut events = Vec::new();
+        for (offset, anchor_number) in [0_i64, 18 * 60 * 60, 36 * 60 * 60]
+            .into_iter()
+            .zip(1_u64..=3)
+        {
+            let start = base + time::Duration::seconds(offset);
+            events.push(event(
+                Uuid::from_u128(100 + u128::from(anchor_number)),
+                start,
+                anchor_number,
+                EventType::VscodeWorkspaceOpenedV1,
+                EventData::VscodeWorkspaceOpened {
+                    resource_id: workspace,
+                },
+            ));
+            events.push(event(
+                Uuid::from_u128(200 + u128::from(anchor_number)),
+                start + time::Duration::seconds(1),
+                anchor_number * 2,
+                EventType::BrowserResourceOpenedV1,
+                EventData::BrowserResourceOpened {
+                    resource_id: browser_a,
+                },
+            ));
+            events.push(event(
+                Uuid::from_u128(300 + u128::from(anchor_number)),
+                start + time::Duration::seconds(2),
+                anchor_number * 2 + 1,
+                EventType::BrowserResourceOpenedV1,
+                EventData::BrowserResourceOpened {
+                    resource_id: browser_b,
+                },
+            ));
+        }
+        let output = discover(DiscoveryInput {
+            events,
+            resources: resources.to_vec(),
+            scopes: scopes.to_vec(),
+        });
+        assert_eq!(output.sessions.len(), 3);
+        assert_eq!(output.suggestions.len(), 1);
+        assert_eq!(
+            output.suggestions[0].action_resource_ids,
+            vec![browser_a, browser_b]
+        );
+        assert_eq!(output.suggestions[0].support_sessions, 3);
+        assert_eq!(output.suggestions[0].confidence_basis_points, 10_000);
+    }
+
+    fn resource(id: Uuid, kind: ResourceKind) -> Resource {
+        let locator = if kind == ResourceKind::WebPage {
+            "https://example.com/page"
+        } else {
+            "/tmp/fubun-fixture"
+        };
+        Resource {
+            id,
+            kind,
+            label: "fixture".to_owned(),
+            locator: locator.to_owned(),
+            canonical_locator: locator.to_owned(),
+            sensitivity: Sensitivity::Normal,
+            scope: ResourceScope::Exact,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn scope(resource_id: Uuid, source: ObservationSource) -> ObservationScope {
+        ObservationScope {
+            id: Uuid::new_v4(),
+            source,
+            resource_id,
+            status: ObservationStatus::Active,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn event(
+        id: Uuid,
+        received_at: OffsetDateTime,
+        sequence_no: u64,
+        event_type: EventType,
+        data: EventData,
+    ) -> Event {
+        Event {
+            spec_version: fubun_domain::EVENT_SPEC_VERSION.to_owned(),
+            id,
+            event_type,
+            source: "fixture".to_owned(),
+            occurred_at: received_at,
+            received_at,
+            actor: Actor::User,
+            adapter: AdapterIdentity {
+                id: "fixture".to_owned(),
+                version: "1".to_owned(),
+                instance_id: Uuid::from_u128(999),
+                sequence_no,
+            },
+            context: None,
+            privacy: PrivacyClass::Normal,
+            data,
+        }
     }
 }
