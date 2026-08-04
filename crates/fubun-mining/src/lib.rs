@@ -321,7 +321,7 @@ pub fn discover(input: DiscoveryInput) -> DiscoveryOutput {
             .filter_map(|session| {
                 session
                     .finished_at
-                    .map(|finish| (finish - session.started_at).whole_milliseconds())
+                    .map(|finish| (finish - session.started_at).whole_milliseconds() as i64)
             })
             .collect();
         suggestions.push(DiscoveredSuggestion {
