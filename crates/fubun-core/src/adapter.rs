@@ -687,7 +687,7 @@ mod tests {
         let manager = AdapterManager::default();
         let instance_id = Uuid::new_v4();
         let (sender, mut receiver) = mpsc::channel(1);
-        let connection_token = manager
+        manager
             .register(
                 hello(instance_id, vec!["desktop.notification.show.v1"]),
                 sender,
@@ -763,7 +763,7 @@ mod tests {
         let manager = AdapterManager::default();
         let instance_id = Uuid::new_v4();
         let (sender, mut receiver) = mpsc::channel(1);
-        manager
+        let connection_token = manager
             .register(
                 hello(instance_id, vec!["desktop.notification.show.v1"]),
                 sender,
