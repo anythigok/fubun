@@ -510,8 +510,7 @@ impl AdapterManager {
     async fn select_eligible(
         &self,
         requirements: &AdapterRequirements,
-    ) -> Result<(EligibleAdapter, ConnectionToken), AdapterEligibilityError>
-    {
+    ) -> Result<(EligibleAdapter, ConnectionToken), AdapterEligibilityError> {
         let connections = self.connections.lock().await;
         if connections.is_empty() {
             return Err(AdapterEligibilityError::Unavailable);
@@ -929,9 +928,7 @@ mod tests {
         assert_eq!(error_a.kind, AdapterDispatchErrorKind::Disconnected);
         assert_eq!(manager.connected_count().await, 1);
 
-        manager
-            .disconnect_if_current(instance_id, token_a)
-            .await;
+        manager.disconnect_if_current(instance_id, token_a).await;
         assert_eq!(manager.connected_count().await, 1);
 
         let manager_b = manager.clone();
@@ -949,9 +946,7 @@ mod tests {
         });
         let request_b = receiver_b.recv().await.expect("B request");
         assert_eq!(manager.pending_count(), 1);
-        manager
-            .disconnect_if_current(instance_id, token_a)
-            .await;
+        manager.disconnect_if_current(instance_id, token_a).await;
         assert_eq!(manager.connected_count().await, 1);
         assert_eq!(manager.pending_count(), 1);
         manager
@@ -967,9 +962,7 @@ mod tests {
             })
             .await;
         assert!(pending_b.await.expect("B task").is_ok());
-        manager
-            .disconnect_if_current(instance_id, token_b)
-            .await;
+        manager.disconnect_if_current(instance_id, token_b).await;
         assert_eq!(manager.connected_count().await, 0);
         assert_eq!(manager.pending_count(), 0);
     }

@@ -1012,8 +1012,8 @@ fn execute_operation(
                     params![scope_id.to_string()],
                     observation_scope_from_sql_row,
                 )
-            .optional()?
-            .ok_or(StorageError::NotFound)?;
+                .optional()?
+                .ok_or(StorageError::NotFound)?;
             if scope.status == ObservationStatus::Active {
                 let now = OffsetDateTime::now_utc();
                 connection.execute(
