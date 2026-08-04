@@ -409,6 +409,7 @@ pub fn fingerprint(workspace: Uuid, actions: &[Uuid]) -> String {
 mod tests {
     use super::*;
     use fubun_domain::{AdapterIdentity, PrivacyClass, ResourceScope, Sensitivity};
+    use proptest::prelude::*;
 
     #[test]
     fn fingerprint_is_stable_and_order_sensitive() {
@@ -488,6 +489,46 @@ mod tests {
         );
         assert_eq!(output.suggestions[0].support_sessions, 3);
         assert_eq!(output.suggestions[0].confidence_basis_points, 10_000);
+    }
+
+    proptest! {
+        #[test]
+        fn discovery_is_deterministic_for_the_same_input(
+            workspace_raw in any::<u128>(),
+            action_raw in any::<u128>(),
+        ) {
+            prop_assume!(workspace_raw != action_raw);
+            let workspace = Uuid::from_u128(workspace_raw);
+            let action = Uuid::from_u128(action_raw);
+            let start = OffsetDateTime::UNIX_EPOCH;
+            let input = DiscoveryInput {
+                events: vec![
+                    event(
+                        Uuid::from_u128(1),
+                        start,
+                        1,
+                        EventType::VscodeWorkspaceOpenedV1,
+                        EventData::VscodeWorkspaceOpened { resource_id: workspace },
+                    ),
+                    event(
+                        Uuid::from_u128(2),
+                        start + time::Duration::seconds(1),
+                        2,
+                        EventType::BrowserResourceOpenedV1,
+                        EventData::BrowserResourceOpened { resource_id: action },
+                    ),
+                ],
+                resources: vec![
+                    resource(workspace, ResourceKind::Directory),
+                    resource(action, ResourceKind::WebPage),
+                ],
+                scopes: vec![
+                    scope(workspace, ObservationSource::VscodeWorkspace),
+                    scope(action, ObservationSource::BrowserChromium),
+                ],
+            };
+            prop_assert_eq!(discover(input.clone()), discover(input));
+        }
     }
 
     fn resource(id: Uuid, kind: ResourceKind) -> Resource {
