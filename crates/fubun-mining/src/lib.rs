@@ -12,6 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -149,7 +150,9 @@ fn eligible_resource(
     kind: ResourceKind,
     source: ObservationSource,
 ) -> bool {
-    resources.iter().any(|resource| resource.id == id && resource.kind == kind)
+    resources
+        .iter()
+        .any(|resource| resource.id == id && resource.kind == kind)
         && active_scope(id, source, scopes)
 }
 
@@ -170,7 +173,11 @@ pub fn discover(input: DiscoveryInput) -> DiscoveryOutput {
         .iter()
         .filter(|resource| resource.kind == ResourceKind::Directory)
         .filter(|resource| {
-            active_scope(resource.id, ObservationSource::VscodeWorkspace, &input.scopes)
+            active_scope(
+                resource.id,
+                ObservationSource::VscodeWorkspace,
+                &input.scopes,
+            )
         })
         .map(|resource| resource.id)
         .collect();
@@ -178,22 +185,28 @@ pub fn discover(input: DiscoveryInput) -> DiscoveryOutput {
     let anchors: Vec<(Uuid, Event)> = events
         .iter()
         .filter_map(|event| {
-            if event.actor != Actor::User || event.event_type != EventType::VscodeWorkspaceOpenedV1 {
+            if event.actor != Actor::User || event.event_type != EventType::VscodeWorkspaceOpenedV1
+            {
                 return None;
             }
             let EventData::VscodeWorkspaceOpened { resource_id } = event.data else {
                 return None;
             };
-            workspace_ids.contains(&resource_id).then(|| (resource_id, event.clone()))
+            workspace_ids
+                .contains(&resource_id)
+                .then(|| (resource_id, event.clone()))
         })
         .collect();
 
     let mut sessions = Vec::new();
     for (workspace_id, anchor) in anchors {
-        let merge = sessions.last_mut().filter(|session: &&mut DiscoveredSession| {
-            session.workspace_resource_id == workspace_id
-                && delta_seconds(anchor.received_at, session.started_at).abs() <= ANCHOR_MERGE_SECONDS
-        });
+        let merge = sessions
+            .last_mut()
+            .filter(|session: &&mut DiscoveredSession| {
+                session.workspace_resource_id == workspace_id
+                    && delta_seconds(anchor.received_at, session.started_at).abs()
+                        <= ANCHOR_MERGE_SECONDS
+            });
         let session = if let Some(existing) = merge {
             existing
         } else {
@@ -223,7 +236,8 @@ pub fn discover(input: DiscoveryInput) -> DiscoveryOutput {
         };
         for event in events.iter().filter(|candidate| {
             candidate.received_at >= session.started_at
-                && delta_seconds(candidate.received_at, session.started_at) <= STARTUP_WINDOW_SECONDS
+                && delta_seconds(candidate.received_at, session.started_at)
+                    <= STARTUP_WINDOW_SECONDS
                 && candidate.event_type == EventType::BrowserResourceOpenedV1
                 && candidate.actor == Actor::User
         }) {
@@ -289,7 +303,10 @@ pub fn discover(input: DiscoveryInput) -> DiscoveryOutput {
     for ((workspace, actions), supporters) in groups {
         candidates_evaluated += 1;
         let support = supporters.len();
-        let eligible = eligible_by_workspace.get(&workspace).copied().unwrap_or_default();
+        let eligible = eligible_by_workspace
+            .get(&workspace)
+            .copied()
+            .unwrap_or_default();
         let confidence = if eligible == 0 {
             0
         } else {
@@ -380,10 +397,12 @@ pub fn fingerprint(workspace: Uuid, actions: &[Uuid]) -> String {
     for action in actions {
         bytes.extend_from_slice(action.as_bytes());
     }
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }
 
 #[cfg(test)]
@@ -395,7 +414,13 @@ mod tests {
         let workspace = Uuid::from_u128(1);
         let a = Uuid::from_u128(2);
         let b = Uuid::from_u128(3);
-        assert_eq!(fingerprint(workspace, &[a, b]), fingerprint(workspace, &[a, b]));
-        assert_ne!(fingerprint(workspace, &[a, b]), fingerprint(workspace, &[b, a]));
+        assert_eq!(
+            fingerprint(workspace, &[a, b]),
+            fingerprint(workspace, &[a, b])
+        );
+        assert_ne!(
+            fingerprint(workspace, &[a, b]),
+            fingerprint(workspace, &[b, a])
+        );
     }
 }

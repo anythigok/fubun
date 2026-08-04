@@ -6,7 +6,7 @@ use fubun_domain::{
     ActionSpec, Event, EventType, Execution, ExecutionStep, ObservationScope, ObservationSource,
     Resource, ResourceKind, Ritual, RitualDefinition, RitualVersion, Sensitivity,
 };
-use fubun_mining::{DiscoveryRun, DiscoveredSession, DiscoveredSuggestion, SuggestionStatus};
+use fubun_mining::{DiscoveredSession, DiscoveredSuggestion, DiscoveryRun, SuggestionStatus};
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;

@@ -7,14 +7,14 @@ use std::{
 use clap::{Args, Parser, Subcommand};
 use fubun_core::{paths::FubunPaths, ClientError, FubunClient};
 use fubun_domain::{Event, ObservationSource, RitualDefinition};
+use fubun_mining::SuggestionStatus;
 use fubun_protocol::{
     DoctorReport, EmptyRequest, EventIngestRequest, EventsListRequest, ExecutionIdRequest,
     ObservationListRequest, ObservationPauseRequest, RequestBody, ResourceCreateRequest,
     ResourceIdRequest, ResponsePayload, RitualActivateRequest, RitualCreateRequest,
-    RitualIdRequest, RitualUpdateRequest, SessionsListRequest, SuggestionsListRequest,
-    SuggestionAcceptRequest, SuggestionSnoozeRequest,
+    RitualIdRequest, RitualUpdateRequest, SessionsListRequest, SuggestionAcceptRequest,
+    SuggestionSnoozeRequest, SuggestionsListRequest,
 };
-use fubun_mining::SuggestionStatus;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -211,24 +211,55 @@ enum BrowserHostCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum DiscoveryCommand { Run, Status }
+enum DiscoveryCommand {
+    Run,
+    Status,
+}
 
 #[derive(Debug, Subcommand)]
-enum SessionsCommand { List { #[arg(long)] workspace: Option<Uuid> } }
+enum SessionsCommand {
+    List {
+        #[arg(long)]
+        workspace: Option<Uuid>,
+    },
+}
 
 #[derive(Debug, Subcommand)]
-enum SessionCommand { Show { session_id: Uuid } }
+enum SessionCommand {
+    Show { session_id: Uuid },
+}
 
 #[derive(Debug, Subcommand)]
-enum SuggestionsCommand { List { #[arg(long)] status: Option<String>, #[arg(long)] workspace: Option<Uuid> } }
+enum SuggestionsCommand {
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        workspace: Option<Uuid>,
+    },
+}
 
 #[derive(Debug, Subcommand)]
 enum SuggestionCommand {
-    Show { suggestion_id: Uuid },
-    Snooze { suggestion_id: Uuid, #[arg(long = "for")] for_duration: String },
-    Dismiss { suggestion_id: Uuid },
-    Block { suggestion_id: Uuid },
-    Accept { suggestion_id: Uuid, #[arg(long)] name: Option<String> },
+    Show {
+        suggestion_id: Uuid,
+    },
+    Snooze {
+        suggestion_id: Uuid,
+        #[arg(long = "for")]
+        for_duration: String,
+    },
+    Dismiss {
+        suggestion_id: Uuid,
+    },
+    Block {
+        suggestion_id: Uuid,
+    },
+    Accept {
+        suggestion_id: Uuid,
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -296,7 +327,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Discovery { command } => discovery_command(&paths.socket_path, command).await?,
         Command::Sessions { command } => sessions_command(&paths.socket_path, command).await?,
         Command::Session { command } => session_command(&paths.socket_path, command).await?,
-        Command::Suggestions { command } => suggestions_command(&paths.socket_path, command).await?,
+        Command::Suggestions { command } => {
+            suggestions_command(&paths.socket_path, command).await?
+        }
         Command::Suggestion { command } => suggestion_command(&paths.socket_path, command).await?,
     }
     Ok(())
@@ -576,14 +609,21 @@ async fn discovery_command(socket_path: &Path, command: DiscoveryCommand) -> Res
         DiscoveryCommand::Run => RequestBody::DiscoveryRun(EmptyRequest::default()),
         DiscoveryCommand::Status => RequestBody::DiscoveryStatus(EmptyRequest::default()),
     };
-    println!("{}", serde_json::to_string_pretty(&client.request(body).await?)?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&client.request(body).await?)?
+    );
     Ok(())
 }
 
 async fn sessions_command(socket_path: &Path, command: SessionsCommand) -> Result<(), CliError> {
     let SessionsCommand::List { workspace } = command;
     let mut client = connect(socket_path).await?;
-    let payload = client.request(RequestBody::SessionsList(SessionsListRequest { workspace_resource_id: workspace })).await?;
+    let payload = client
+        .request(RequestBody::SessionsList(SessionsListRequest {
+            workspace_resource_id: workspace,
+        }))
+        .await?;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
@@ -591,37 +631,79 @@ async fn sessions_command(socket_path: &Path, command: SessionsCommand) -> Resul
 async fn session_command(socket_path: &Path, command: SessionCommand) -> Result<(), CliError> {
     let SessionCommand::Show { session_id } = command;
     let mut client = connect(socket_path).await?;
-    let payload = client.request(RequestBody::SessionShow(RitualIdRequest { ritual_id: session_id })).await?;
+    let payload = client
+        .request(RequestBody::SessionShow(RitualIdRequest {
+            ritual_id: session_id,
+        }))
+        .await?;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 
-async fn suggestions_command(socket_path: &Path, command: SuggestionsCommand) -> Result<(), CliError> {
+async fn suggestions_command(
+    socket_path: &Path,
+    command: SuggestionsCommand,
+) -> Result<(), CliError> {
     let SuggestionsCommand::List { status, workspace } = command;
-    let status = status.map(|value| match value.as_str() {
-        "pending" => Ok(SuggestionStatus::Pending),
-        "snoozed" => Ok(SuggestionStatus::Snoozed),
-        "dismissed" => Ok(SuggestionStatus::Dismissed),
-        "accepted" => Ok(SuggestionStatus::Accepted),
-        "blocked" => Ok(SuggestionStatus::Blocked),
-        _ => Err(CliError::UnexpectedResponse),
-    }).transpose()?;
+    let status = status
+        .map(|value| match value.as_str() {
+            "pending" => Ok(SuggestionStatus::Pending),
+            "snoozed" => Ok(SuggestionStatus::Snoozed),
+            "dismissed" => Ok(SuggestionStatus::Dismissed),
+            "accepted" => Ok(SuggestionStatus::Accepted),
+            "blocked" => Ok(SuggestionStatus::Blocked),
+            _ => Err(CliError::UnexpectedResponse),
+        })
+        .transpose()?;
     let mut client = connect(socket_path).await?;
-    let payload = client.request(RequestBody::SuggestionsList(SuggestionsListRequest { status, workspace_resource_id: workspace })).await?;
+    let payload = client
+        .request(RequestBody::SuggestionsList(SuggestionsListRequest {
+            status,
+            workspace_resource_id: workspace,
+        }))
+        .await?;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 
-async fn suggestion_command(socket_path: &Path, command: SuggestionCommand) -> Result<(), CliError> {
+async fn suggestion_command(
+    socket_path: &Path,
+    command: SuggestionCommand,
+) -> Result<(), CliError> {
     let mut client = connect(socket_path).await?;
     let body = match command {
-        SuggestionCommand::Show { suggestion_id } => RequestBody::SuggestionShow(RitualIdRequest { ritual_id: suggestion_id }),
-        SuggestionCommand::Snooze { suggestion_id, for_duration } => RequestBody::SuggestionSnooze(SuggestionSnoozeRequest { suggestion_id, for_duration }),
-        SuggestionCommand::Dismiss { suggestion_id } => RequestBody::SuggestionDismiss(RitualIdRequest { ritual_id: suggestion_id }),
-        SuggestionCommand::Block { suggestion_id } => RequestBody::SuggestionBlock(RitualIdRequest { ritual_id: suggestion_id }),
-        SuggestionCommand::Accept { suggestion_id, name } => RequestBody::SuggestionAccept(SuggestionAcceptRequest { suggestion_id, name }),
+        SuggestionCommand::Show { suggestion_id } => RequestBody::SuggestionShow(RitualIdRequest {
+            ritual_id: suggestion_id,
+        }),
+        SuggestionCommand::Snooze {
+            suggestion_id,
+            for_duration,
+        } => RequestBody::SuggestionSnooze(SuggestionSnoozeRequest {
+            suggestion_id,
+            for_duration,
+        }),
+        SuggestionCommand::Dismiss { suggestion_id } => {
+            RequestBody::SuggestionDismiss(RitualIdRequest {
+                ritual_id: suggestion_id,
+            })
+        }
+        SuggestionCommand::Block { suggestion_id } => {
+            RequestBody::SuggestionBlock(RitualIdRequest {
+                ritual_id: suggestion_id,
+            })
+        }
+        SuggestionCommand::Accept {
+            suggestion_id,
+            name,
+        } => RequestBody::SuggestionAccept(SuggestionAcceptRequest {
+            suggestion_id,
+            name,
+        }),
     };
-    println!("{}", serde_json::to_string_pretty(&client.request(body).await?)?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&client.request(body).await?)?
+    );
     Ok(())
 }
 

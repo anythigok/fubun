@@ -62,9 +62,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         output.join("adapter-response-envelope.schema.json"),
         &schema_for!(AdapterResponseEnvelope),
     )?;
-    write_schema(output.join("discovery-run.schema.json"), &schema_for!(DiscoveryRun))?;
-    write_schema(output.join("session.schema.json"), &schema_for!(DiscoveredSession))?;
-    write_schema(output.join("suggestion.schema.json"), &schema_for!(DiscoveredSuggestion))?;
+    write_schema(
+        output.join("discovery-run.schema.json"),
+        &schema_for!(DiscoveryRun),
+    )?;
+    write_schema(
+        output.join("session.schema.json"),
+        &schema_for!(DiscoveredSession),
+    )?;
+    write_schema(
+        output.join("suggestion.schema.json"),
+        &schema_for!(DiscoveredSuggestion),
+    )?;
     Ok(())
 }
 
