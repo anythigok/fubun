@@ -76,12 +76,20 @@ export class BrowserNativeBridge {
   }
 
   public async request(type: string, payload: unknown, expectedType: string): Promise<unknown> {
+    return this.requestPrepared(type, expectedType, () => payload);
+  }
+
+  public async requestPrepared(
+    type: string,
+    expectedType: string,
+    payloadFactory: () => unknown,
+  ): Promise<unknown> {
     const port = await this.ensureConnected();
     const envelope: NativeEnvelope<unknown> = {
       protocol_version: PROTOCOL_VERSION,
       request_id: crypto.randomUUID(),
       type,
-      payload,
+      payload: payloadFactory(),
     };
     return this.requestOnPort(port, envelope, expectedType);
   }

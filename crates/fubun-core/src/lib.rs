@@ -293,14 +293,17 @@ async fn handle_adapter_connection(
     let (reader, mut writer) = stream.into_split();
     let (sender, mut receiver) = mpsc::channel(32);
     let instance_id = hello.instance_id;
-    if let Err(error) = adapters.register(hello.clone(), sender.clone()).await {
-        write_json_frame(
-            &mut writer,
-            &ResponseEnvelope::error(request_id, "protocol_error", error.to_string()),
-        )
-        .await?;
-        return Ok(());
-    }
+    let connection_token = match adapters.register(hello.clone(), sender.clone()).await {
+        Ok(connection_token) => connection_token,
+        Err(error) => {
+            write_json_frame(
+                &mut writer,
+                &ResponseEnvelope::error(request_id, "protocol_error", error.to_string()),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
     let writer_task = tokio::spawn(async move {
         while let Some(request) = receiver.recv().await {
             if write_json_frame(&mut writer, &request).await.is_err() {
@@ -345,7 +348,9 @@ async fn handle_adapter_connection(
             }
         }
     }
-    adapters.disconnect(instance_id).await;
+    adapters
+        .disconnect_if_current(instance_id, connection_token)
+        .await;
     writer_task.abort();
     Ok(())
 }
@@ -391,8 +396,8 @@ async fn process_request(
                 Ok(scope) => ResponseEnvelope::ok(id, ResponsePayload::ObservationPaused(scope)),
                 Err(StorageError::NotFound) => ResponseEnvelope::error(
                     id,
-                    "scope_not_active",
-                    "observation scope is not active",
+                    "scope_not_found",
+                    "observation scope was not found",
                 ),
                 Err(error) => storage_error(id, error),
             }

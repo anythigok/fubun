@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use fubun_core::{paths::FubunPaths, start_server, FubunClient};
+use fubun_core::{paths::FubunPaths, start_server, ClientError, FubunClient};
 use fubun_domain::{
     Actor, AdapterIdentity, Event, EventData, EventType, ObservationSource, ObservationStatus,
     PrivacyClass, EVENT_SPEC_VERSION,
@@ -240,6 +240,30 @@ async fn browser_scope_event_is_core_built_and_pause_blocks_events() {
         panic!("scopes")
     };
     assert_eq!(scopes.scopes[0].status, ObservationStatus::Paused);
+    let paused_again = client
+        .request(RequestBody::ObservationPause(
+            fubun_protocol::ObservationPauseRequest {
+                scope_id: enabled.scope.id,
+            },
+        ))
+        .await
+        .expect("repeated pause");
+    let ResponsePayload::ObservationPaused(paused_again) = paused_again else {
+        panic!("repeated pause response")
+    };
+    assert_eq!(paused_again.status, ObservationStatus::Paused);
+    let missing = client
+        .request(RequestBody::ObservationPause(
+            fubun_protocol::ObservationPauseRequest {
+                scope_id: Uuid::new_v4(),
+            },
+        ))
+        .await
+        .expect_err("unknown scope must fail");
+    assert!(matches!(
+        missing,
+        ClientError::Rejected { code, .. } if code == "scope_not_found"
+    ));
     server.shutdown().await.expect("shutdown");
 }
 

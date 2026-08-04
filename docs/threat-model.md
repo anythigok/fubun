@@ -82,6 +82,8 @@ Native Host stdoutは32-bit native-endian frame以外を書きません。0長�
 
 Permission解除を検出したExtensionは、まずLocal Mappingをinactive/pause pendingへ永続化してEvent対象から外します。その後に各Core Scope Pauseを試行し、成功したMappingだけを削除します。Core不達時もLocal Event送信は再開せず、Storage更新が完了してからNative Portを再接続します。Service Worker起動時はPermissionを再照合し、残ったpause pending Scopeを一度だけ再同期します。Browser Adapterの新Instanceは許可済みResource ID snapshotを再宣言し、Coreは同一Instance内のPermission、Capability、Resource状態を同時に満たす場合だけAction/Eventを受け付けます。
 
+PauseはCore側で冪等化されているため、Commit後に応答を失った再送でも既にpausedのScopeを成功として返します。Local mappingは再送成功後にだけ削除し、pause_pendingを永久に保持しません。
+
 ### Raw URL Leakage / Query Token Leakage / Incognito Leakage
 
 Canonical URLはquery/fragmentを除去してResource作成時だけ一時利用し、Event、通常Log、Execution History、Extension Storageには保存しません。Incognito Tabは無視し、許可されていないOriginへNative Messageを送信しません。
@@ -105,6 +107,8 @@ StorageにはResource ID、Scope ID、canonical hash、origin pattern、label、
 ### Native Host Disconnect / Service Worker Restart / Reconnect Storm
 
 Native Port切断時はPending Native Requestをすべてrejectし、指数Backoff（上限30秒）で接続を一度だけ再試行します。Native HostのCore Adapter streamはReaderを一つに固定し、Event Ackをrequest ID別に配送するため、Action ExecuteがAckより先に到着しても誤配送しません。Service WorkerはStorageからMappingを復元し、global stateだけを正本にしません。Core側のPending RequestはAdapter Disconnect、Timeout、Shutdownで解放されます。
+
+CoreのAdapter接続は`adapter_instance_id`とは別のConnection Tokenで世代識別します。同じInstance IDの新接続が登録された後に旧接続が終了しても、条件付きDisconnectは新接続を削除せず、旧TokenのPendingだけを解放します。Browser EventのsequenceはHello完了後の現Adapter Instanceに対して発行し、旧Instanceで払い出した番号を新接続へ持ち込まず、新Instanceでは1から開始します。
 
 ### Semantic Event Injection / VS Code Adapter Session
 

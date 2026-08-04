@@ -1005,21 +1005,25 @@ fn execute_operation(
             Ok(StorageResponse::ObservationScopes(scopes))
         }
         Operation::PauseObservationScope(scope_id) => {
-            let now = OffsetDateTime::now_utc();
-            let changed = connection.execute(
-                "UPDATE observation_scopes SET status = 'paused', updated_at = ?1
-                 WHERE id = ?2 AND status = 'active'",
-                params![format_ts(now)?, scope_id.to_string()],
-            )?;
-            if changed == 0 {
-                return Err(StorageError::NotFound);
+            let mut scope = connection
+                .query_row(
+                    "SELECT id, source, resource_id, status, created_at, updated_at
+                     FROM observation_scopes WHERE id = ?1",
+                    params![scope_id.to_string()],
+                    observation_scope_from_sql_row,
+                )
+            .optional()?
+            .ok_or(StorageError::NotFound)?;
+            if scope.status == ObservationStatus::Active {
+                let now = OffsetDateTime::now_utc();
+                connection.execute(
+                    "UPDATE observation_scopes SET status = 'paused', updated_at = ?1
+                     WHERE id = ?2 AND status = 'active'",
+                    params![format_ts(now)?, scope_id.to_string()],
+                )?;
+                scope.status = ObservationStatus::Paused;
+                scope.updated_at = now;
             }
-            let scope = connection.query_row(
-                "SELECT id, source, resource_id, status, created_at, updated_at
-                 FROM observation_scopes WHERE id = ?1",
-                params![scope_id.to_string()],
-                observation_scope_from_sql_row,
-            )?;
             Ok(StorageResponse::ObservationScope(scope))
         }
     }
@@ -1905,7 +1909,8 @@ const fn event_type_name(event_type: EventType) -> &'static str {
 mod tests {
     use super::*;
     use fubun_domain::{
-        ActionSpec, AdapterIdentity, EventData, ExecutionMode, FailureMode, RitualExecutionConfig,
+        ActionSpec, AdapterIdentity, EventData, ExecutionMode, FailureMode, ObservationScope,
+        Resource, ResourceKind, ResourceScope, RitualExecutionConfig, Sensitivity,
         EVENT_SPEC_VERSION, RITUAL_SCHEMA_VERSION,
     };
     use tempfile::TempDir;
@@ -2105,6 +2110,58 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("column names");
         assert!(columns.iter().any(|column| column == "adapter_instance_id"));
+    }
+
+    #[tokio::test]
+    async fn pausing_an_observation_scope_is_idempotent() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        let storage = Storage::open(&path).expect("open storage");
+        let handle = storage.handle();
+        let now = OffsetDateTime::now_utc();
+        let resource_id = Uuid::new_v4();
+        handle
+            .create_resource(Resource {
+                id: resource_id,
+                kind: ResourceKind::WebPage,
+                label: "pause test".to_owned(),
+                locator: "https://example.com/pause".to_owned(),
+                canonical_locator: "https://example.com/pause".to_owned(),
+                sensitivity: Sensitivity::Normal,
+                scope: ResourceScope::Exact,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("resource");
+        let scope_id = Uuid::new_v4();
+        let active = handle
+            .ensure_observation_scope(ObservationScope {
+                id: scope_id,
+                source: ObservationSource::BrowserChromium,
+                resource_id,
+                status: ObservationStatus::Active,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("scope");
+        let paused = handle
+            .pause_observation_scope(scope_id)
+            .await
+            .expect("active pause");
+        let paused_again = handle
+            .pause_observation_scope(scope_id)
+            .await
+            .expect("paused pause");
+        assert_eq!(active.status, ObservationStatus::Active);
+        assert_eq!(paused.status, ObservationStatus::Paused);
+        assert_eq!(paused_again, paused);
+        assert!(matches!(
+            handle.pause_observation_scope(Uuid::new_v4()).await,
+            Err(StorageError::NotFound)
+        ));
+        storage.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]

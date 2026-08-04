@@ -68,9 +68,10 @@ class FakeNative {
     this.responses = new Map();
     this.ready = true;
     this.reconnects = 0;
+    this.onReconnect = undefined;
   }
   async start() {}
-  async reconnect() { this.reconnects += 1; }
+  async reconnect() { this.reconnects += 1; await this.onReconnect?.(); }
   isReady() { return this.ready; }
   async request(type, payload, expected) {
     this.calls.push({ type, payload, expected });
@@ -78,6 +79,13 @@ class FakeNative {
     if (handler instanceof Error) throw handler;
     if (typeof handler === "function") return handler(type, payload, expected);
     return handler;
+  }
+  async requestPrepared(type, expected, payloadFactory) {
+    if (!this.ready) {
+      this.ready = true;
+      await this.reconnect();
+    }
+    return this.request(type, payloadFactory(), expected);
   }
   async notify(type, requestId, payload) { this.notifications.push({ type, requestId, payload }); }
 }
@@ -195,6 +203,36 @@ test("navigation events use strictly increasing sequence numbers", async () => {
   browser.active = { id: 3, url: "https://example.com/page", incognito: false };
 });
 
+test("navigation allocates sequence after reconnect and never reuses a failed sequence", async () => {
+  const active = await mapping();
+  const { integration, native } = fixture({ initial: [active] });
+  native.responses.set("browser.event.emit", { event_id: actionId, stored: true, duplicate: false });
+  native.onReconnect = () => integration.extensionHello();
+  native.responses.set("browser.event.emit", new Error("ack timeout"));
+  await assert.rejects(integration.onNavigation({ id: 1, url: "https://example.com/page", incognito: false }));
+  native.responses.set("browser.event.emit", { event_id: actionId, stored: true, duplicate: false });
+  await integration.onNavigation({ id: 2, url: "https://example.com/page", incognito: false });
+  native.ready = false;
+  await integration.onNavigation({ id: 3, url: "https://example.com/page", incognito: false });
+  await integration.onNavigation({ id: 4, url: "https://example.com/page", incognito: false });
+  const events = native.calls.filter((call) => call.type === "browser.event.emit");
+  assert.deepEqual(events.map((call) => call.payload.sequence_no), [1, 2, 1, 2]);
+  assert.equal(native.reconnects, 1);
+});
+
+test("one adapter instance receives one hundred unique increasing sequences", async () => {
+  const active = await mapping();
+  const { integration, native } = fixture({ initial: [active] });
+  native.responses.set("browser.event.emit", { event_id: actionId, stored: true, duplicate: false });
+  for (let tabId = 1; tabId <= 100; tabId += 1) {
+    await integration.onNavigation({ id: tabId, url: "https://example.com/page", incognito: false });
+  }
+  const sequences = native.calls
+    .filter((call) => call.type === "browser.event.emit")
+    .map((call) => call.payload.sequence_no);
+  assert.deepEqual(sequences, Array.from({ length: 100 }, (_value, index) => index + 1));
+});
+
 test("a navigation with revoked permission pauses the Core scope and emits no event", async () => {
   const active = await mapping();
   const { integration, native, store } = fixture({ initial: [active], permissions: new Set() });
@@ -294,6 +332,31 @@ test("NativeBridge correlates responses and delivers action before event acknowl
   await event;
   assert.deepEqual(actions, [actionId]);
   assert.equal(bridge.pendingCount(), 0);
+});
+
+test("NativeBridge prepares connection-bound payload only after Hello completes", async () => {
+  const port = new FakePort();
+  let factoryCalls = 0;
+  const bridge = new BrowserNativeBridge({
+    createPort: () => port,
+    createHello: async () => ({ protocol_version: PROTOCOL_VERSION, request_id: resourceId, type: "extension.hello", payload: {} }),
+    onActionExecute: async () => {},
+    requestTimeoutMs: 1_000,
+  });
+  const started = bridge.start();
+  const event = bridge.requestPrepared("browser.event.emit", "browser.event.ack", () => {
+    factoryCalls += 1;
+    return { sequence_no: 1 };
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(factoryCalls, 0);
+  port.emit({ protocol_version: PROTOCOL_VERSION, request_id: resourceId, type: "extension.hello.ack", payload: {} });
+  await started;
+  await waitFor(() => factoryCalls === 1);
+  const requestId = port.sent.at(-1).request_id;
+  port.emit({ protocol_version: PROTOCOL_VERSION, request_id: requestId, type: "browser.event.ack", payload: {} });
+  await event;
+  bridge.stop();
 });
 
 test("NativeBridge rejects pending requests on disconnect", async () => {

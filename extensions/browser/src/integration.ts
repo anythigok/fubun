@@ -33,6 +33,7 @@ export interface NativeRequester {
   reconnect(): Promise<void>;
   isReady(): boolean;
   request(type: string, payload: unknown, expectedType: string): Promise<unknown>;
+  requestPrepared(type: string, expectedType: string, payloadFactory: () => unknown): Promise<unknown>;
   notify(type: string, requestId: string, payload: unknown): Promise<void>;
 }
 
@@ -220,13 +221,19 @@ export class BrowserIntegration {
     const previous = this.dedup.get(key);
     if (previous !== undefined && previous + 5000 > now) return;
     this.dedup.set(key, now);
-    const sequenceNo = this.nextSequence;
-    this.nextSequence += 1;
     const event = async (): Promise<void> => {
-      const response = await this.options.native.request(
+      const response = await this.options.native.requestPrepared(
         "browser.event.emit",
-        { sequence_no: sequenceNo, occurred_at: new Date(now).toISOString(), resource_id: mapping.resource_id },
         "browser.event.ack",
+        () => {
+          const sequenceNo = this.nextSequence;
+          this.nextSequence += 1;
+          return {
+            sequence_no: sequenceNo,
+            occurred_at: new Date(now).toISOString(),
+            resource_id: mapping.resource_id,
+          };
+        },
       );
       parseEventAck(response);
     };

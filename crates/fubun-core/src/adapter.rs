@@ -77,6 +77,12 @@ pub struct EligibleAdapter {
     pub instance_id: Uuid,
 }
 
+/// Internal identity for one concrete adapter socket. An adapter instance ID
+/// may be reused by a reconnecting process, so it is not sufficient to guard
+/// connection teardown or pending dispatch cleanup by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionToken(Uuid);
+
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AdapterEligibilityError {
     #[error("adapter is unavailable")]
@@ -134,11 +140,13 @@ pub struct DispatchedActionResult {
 
 struct PendingRequest {
     identity: EligibleAdapter,
+    connection_token: ConnectionToken,
     action_execution_id: Uuid,
     sender: oneshot::Sender<Result<ActionResult, AdapterDispatchErrorKind>>,
 }
 
 struct AdapterConnection {
+    connection_token: ConnectionToken,
     hello: AdapterHello,
     sender: mpsc::Sender<AdapterRequestEnvelope>,
     connected_at: OffsetDateTime,
@@ -233,19 +241,24 @@ impl AdapterManager {
         &self,
         hello: AdapterHello,
         sender: mpsc::Sender<AdapterRequestEnvelope>,
-    ) -> Result<(), AdapterRegistrationError> {
+    ) -> Result<ConnectionToken, AdapterRegistrationError> {
         Self::validate_hello(&hello)?;
         let now = OffsetDateTime::now_utc();
-        self.connections.lock().await.insert(
+        let connection_token = ConnectionToken(Uuid::new_v4());
+        let replaced = self.connections.lock().await.insert(
             hello.instance_id,
             AdapterConnection {
+                connection_token,
                 hello,
                 sender,
                 connected_at: now,
                 last_seen_at: now,
             },
         );
-        Ok(())
+        if let Some(previous) = replaced {
+            self.fail_pending_for_token(previous.connection_token);
+        }
+        Ok(connection_token)
     }
 
     pub async fn touch(&self, instance_id: Uuid) {
@@ -254,34 +267,53 @@ impl AdapterManager {
         }
     }
 
-    pub async fn disconnect(&self, instance_id: Uuid) {
-        self.connections.lock().await.remove(&instance_id);
-        let mut pending = self.pending.lock().expect("pending mutex poisoned");
-        let requests: Vec<_> = pending
-            .iter()
-            .filter_map(|(id, request)| {
-                (request.identity.instance_id == instance_id).then_some(*id)
-            })
-            .collect();
-        for request_id in requests {
-            if let Some(request) = pending.remove(&request_id) {
-                let _ = request
-                    .sender
-                    .send(Err(AdapterDispatchErrorKind::Disconnected));
+    pub async fn disconnect_if_current(
+        &self,
+        instance_id: Uuid,
+        connection_token: ConnectionToken,
+    ) {
+        let removed = {
+            let mut connections = self.connections.lock().await;
+            if connections
+                .get(&instance_id)
+                .is_some_and(|connection| connection.connection_token == connection_token)
+            {
+                connections.remove(&instance_id);
+                true
+            } else {
+                false
             }
+        };
+        if !removed {
+            return;
         }
+        self.fail_pending_for_token(connection_token);
     }
 
     pub async fn shutdown(&self) {
-        let instances: Vec<Uuid> = self.connections.lock().await.keys().copied().collect();
-        for instance_id in instances {
-            self.disconnect(instance_id).await;
-        }
+        self.connections.lock().await.clear();
         let mut pending = self.pending.lock().expect("pending mutex poisoned");
         for (_, request) in pending.drain() {
             let _ = request
                 .sender
                 .send(Err(AdapterDispatchErrorKind::Disconnected));
+        }
+    }
+
+    fn fail_pending_for_token(&self, connection_token: ConnectionToken) {
+        let mut pending = self.pending.lock().expect("pending mutex poisoned");
+        let request_ids: Vec<_> = pending
+            .iter()
+            .filter_map(|(request_id, request)| {
+                (request.connection_token == connection_token).then_some(*request_id)
+            })
+            .collect();
+        for request_id in request_ids {
+            if let Some(request) = pending.remove(&request_id) {
+                let _ = request
+                    .sender
+                    .send(Err(AdapterDispatchErrorKind::Disconnected));
+            }
         }
     }
 
@@ -305,7 +337,7 @@ impl AdapterManager {
         timeout: Duration,
     ) -> Result<DispatchedActionResult, DispatchedActionError> {
         let requirements = AdapterRequirements::from_action(&action);
-        let (identity, sender) =
+        let (identity, connection_token) =
             self.select_eligible(&requirements)
                 .await
                 .map_err(|error| DispatchedActionError {
@@ -332,14 +364,23 @@ impl AdapterManager {
             }),
         };
         let (sender_reply, receiver_reply) = oneshot::channel();
-        self.pending.lock().expect("pending mutex poisoned").insert(
-            request_id,
-            PendingRequest {
-                identity: identity.clone(),
-                action_execution_id,
-                sender: sender_reply,
-            },
-        );
+        let sender = self
+            .insert_pending_if_current(
+                &identity,
+                connection_token,
+                request_id,
+                PendingRequest {
+                    identity: identity.clone(),
+                    connection_token,
+                    action_execution_id,
+                    sender: sender_reply,
+                },
+            )
+            .await
+            .ok_or_else(|| DispatchedActionError {
+                identity: Some(identity.clone()),
+                kind: AdapterDispatchErrorKind::Disconnected,
+            })?;
         let mut pending_guard = PendingRequestGuard::new(self.pending.clone(), request_id);
         if sender.send(request).await.is_err() {
             return Err(DispatchedActionError {
@@ -469,7 +510,7 @@ impl AdapterManager {
     async fn select_eligible(
         &self,
         requirements: &AdapterRequirements,
-    ) -> Result<(EligibleAdapter, mpsc::Sender<AdapterRequestEnvelope>), AdapterEligibilityError>
+    ) -> Result<(EligibleAdapter, ConnectionToken), AdapterEligibilityError>
     {
         let connections = self.connections.lock().await;
         if connections.is_empty() {
@@ -484,7 +525,7 @@ impl AdapterManager {
                         adapter_id: connection.hello.adapter_id.clone(),
                         instance_id: *instance_id,
                     },
-                    connection.sender.clone(),
+                    connection.connection_token,
                 )
             })
             .collect();
@@ -493,6 +534,30 @@ impl AdapterManager {
             .into_iter()
             .next()
             .ok_or(AdapterEligibilityError::Ineligible)
+    }
+
+    async fn insert_pending_if_current(
+        &self,
+        identity: &EligibleAdapter,
+        connection_token: ConnectionToken,
+        request_id: Uuid,
+        request: PendingRequest,
+    ) -> Option<mpsc::Sender<AdapterRequestEnvelope>> {
+        // Hold the connection lock while inserting the pending request. A
+        // replacement registration takes the same lock before draining the
+        // old token, so a request can never be registered after its socket
+        // has already been replaced.
+        let connections = self.connections.lock().await;
+        let connection = connections.get(&identity.instance_id)?;
+        if connection.connection_token != connection_token {
+            return None;
+        }
+        let sender = connection.sender.clone();
+        self.pending
+            .lock()
+            .expect("pending mutex poisoned")
+            .insert(request_id, request);
+        Some(sender)
     }
 }
 
@@ -623,7 +688,7 @@ mod tests {
         let manager = AdapterManager::default();
         let instance_id = Uuid::new_v4();
         let (sender, mut receiver) = mpsc::channel(1);
-        manager
+        let connection_token = manager
             .register(
                 hello(instance_id, vec!["desktop.notification.show.v1"]),
                 sender,
@@ -742,7 +807,9 @@ mod tests {
                 .await
         });
         receiver.recv().await.expect("request");
-        manager.disconnect(instance_id).await;
+        manager
+            .disconnect_if_current(instance_id, connection_token)
+            .await;
         let disconnect_error = disconnect.await.expect("task").expect_err("disconnect");
         assert_eq!(
             disconnect_error.kind,
@@ -814,6 +881,96 @@ mod tests {
             send_failure.identity.map(|identity| identity.instance_id),
             Some(send_failure_instance)
         );
+        assert_eq!(manager.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_connection_token_cannot_remove_replacement_or_its_pending_request() {
+        let manager = AdapterManager::default();
+        let instance_id = Uuid::new_v4();
+        let (sender_a, mut receiver_a) = mpsc::channel(1);
+        let token_a = manager
+            .register(
+                hello(instance_id, vec!["desktop.notification.show.v1"]),
+                sender_a,
+            )
+            .await
+            .expect("register A");
+
+        let manager_a = manager.clone();
+        let pending_a = tokio::spawn(async move {
+            manager_a
+                .execute(
+                    ActionSpec::DesktopNotificationShow {
+                        title: "A".to_owned(),
+                        body: "A".to_owned(),
+                    },
+                    None,
+                    Duration::from_secs(30),
+                )
+                .await
+        });
+        receiver_a.recv().await.expect("A request");
+        assert_eq!(manager.pending_count(), 1);
+
+        let (sender_b, mut receiver_b) = mpsc::channel(1);
+        let token_b = manager
+            .register(
+                hello(instance_id, vec!["desktop.notification.show.v1"]),
+                sender_b,
+            )
+            .await
+            .expect("register B");
+        assert_ne!(token_a, token_b);
+        let error_a = pending_a
+            .await
+            .expect("A task")
+            .expect_err("A must be disconnected on replacement");
+        assert_eq!(error_a.kind, AdapterDispatchErrorKind::Disconnected);
+        assert_eq!(manager.connected_count().await, 1);
+
+        manager
+            .disconnect_if_current(instance_id, token_a)
+            .await;
+        assert_eq!(manager.connected_count().await, 1);
+
+        let manager_b = manager.clone();
+        let pending_b = tokio::spawn(async move {
+            manager_b
+                .execute(
+                    ActionSpec::DesktopNotificationShow {
+                        title: "B".to_owned(),
+                        body: "B".to_owned(),
+                    },
+                    None,
+                    Duration::from_secs(1),
+                )
+                .await
+        });
+        let request_b = receiver_b.recv().await.expect("B request");
+        assert_eq!(manager.pending_count(), 1);
+        manager
+            .disconnect_if_current(instance_id, token_a)
+            .await;
+        assert_eq!(manager.connected_count().await, 1);
+        assert_eq!(manager.pending_count(), 1);
+        manager
+            .resolve(AdapterResponseEnvelope {
+                protocol_version: fubun_protocol::CURRENT_PROTOCOL_VERSION,
+                request_id: request_b.request_id,
+                action_execution_id: request_b.action_execution_id,
+                body: AdapterResponseBody::ActionResult(ActionResult {
+                    status: fubun_protocol::AdapterActionStatus::Succeeded,
+                    result_code: "ok".to_owned(),
+                    redacted_message: "ok".to_owned(),
+                }),
+            })
+            .await;
+        assert!(pending_b.await.expect("B task").is_ok());
+        manager
+            .disconnect_if_current(instance_id, token_b)
+            .await;
+        assert_eq!(manager.connected_count().await, 0);
         assert_eq!(manager.pending_count(), 0);
     }
 
