@@ -20,7 +20,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -650,6 +650,18 @@ fn migrate(connection: &mut Connection) -> Result<(), StorageError> {
         let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
         transaction.execute(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+            params![2_u32, now],
+        )?;
+        transaction.commit()?;
+    }
+    let current = current_schema_version(connection)?;
+    if current == 2 {
+        let transaction = connection.transaction()?;
+        transaction
+            .execute_batch("ALTER TABLE execution_steps ADD COLUMN adapter_instance_id TEXT;")?;
+        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
             params![SCHEMA_VERSION, now],
         )?;
         transaction.commit()?;
@@ -1121,8 +1133,8 @@ fn insert_step(
 ) -> Result<(), StorageError> {
     transaction.execute(
         "INSERT INTO execution_steps(
-            id, execution_id, step_index, action_type, status, adapter_id, started_at, finished_at, result_code, redacted_message
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            id, execution_id, step_index, action_type, status, adapter_id, adapter_instance_id, started_at, finished_at, result_code, redacted_message
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             step.id.to_string(),
             step.execution_id.to_string(),
@@ -1130,6 +1142,7 @@ fn insert_step(
             step.action_type,
             execution_step_status_name(step.status),
             step.adapter_id,
+            step.adapter_instance_id.map(|value| value.to_string()),
             format_ts(step.started_at)?,
             step.finished_at.map(format_ts).transpose()?,
             step.result_code,
@@ -1164,11 +1177,12 @@ fn update_execution(connection: &Connection, execution: Execution) -> Result<(),
 
 fn update_step(connection: &Connection, step: ExecutionStep) -> Result<(), StorageError> {
     let changed = connection.execute(
-        "UPDATE execution_steps SET status = ?1, adapter_id = ?2, started_at = ?3, finished_at = ?4,
-             result_code = ?5, redacted_message = ?6 WHERE id = ?7",
+        "UPDATE execution_steps SET status = ?1, adapter_id = ?2, adapter_instance_id = ?3,
+             started_at = ?4, finished_at = ?5, result_code = ?6, redacted_message = ?7 WHERE id = ?8",
         params![
             execution_step_status_name(step.status),
             step.adapter_id,
+            step.adapter_instance_id.map(|value| value.to_string()),
             format_ts(step.started_at)?,
             step.finished_at.map(format_ts).transpose()?,
             step.result_code,
@@ -1208,7 +1222,7 @@ fn get_execution(
         .ok_or(StorageError::NotFound)
         .and_then(execution_from_row)?;
     let mut statement = connection.prepare(
-        "SELECT id, execution_id, step_index, action_type, status, adapter_id, started_at, finished_at, result_code, redacted_message
+        "SELECT id, execution_id, step_index, action_type, status, adapter_id, adapter_instance_id, started_at, finished_at, result_code, redacted_message
          FROM execution_steps WHERE execution_id = ?1 ORDER BY step_index ASC",
     )?;
     let rows = statement.query_map(params![execution_id.to_string()], execution_step_row)?;
@@ -1285,6 +1299,7 @@ fn execution_step_row(
     String,
     String,
     Option<String>,
+    Option<String>,
     String,
     Option<String>,
     Option<String>,
@@ -1301,6 +1316,7 @@ fn execution_step_row(
         row.get(7)?,
         row.get(8)?,
         row.get(9)?,
+        row.get(10)?,
     ))
 }
 
@@ -1312,6 +1328,7 @@ fn execution_step_from_row(
         i64,
         String,
         String,
+        Option<String>,
         Option<String>,
         String,
         Option<String>,
@@ -1327,10 +1344,11 @@ fn execution_step_from_row(
         action_type: row.3,
         status: parse_execution_step_status(&row.4)?,
         adapter_id: row.5,
-        started_at: parse_ts(&row.6)?,
-        finished_at: row.7.map(|value| parse_ts(&value)).transpose()?,
-        result_code: row.8,
-        redacted_message: row.9,
+        adapter_instance_id: row.6.map(|value| parse_uuid(&value)).transpose()?,
+        started_at: parse_ts(&row.7)?,
+        finished_at: row.8.map(|value| parse_ts(&value)).transpose()?,
+        result_code: row.9,
+        redacted_message: row.10,
     })
 }
 
@@ -1696,7 +1714,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrates_phase_one_database_to_phase_two() {
+    async fn migrates_phase_one_database_to_current_schema() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("fubun/fubun.db");
         fs::create_dir_all(path.parent().expect("parent")).expect("parent");
@@ -1717,8 +1735,56 @@ mod tests {
             .schema_version()
             .await
             .expect("schema version");
-        assert_eq!(version, 2);
-        drop(storage);
+        assert_eq!(version, SCHEMA_VERSION);
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn migrates_phase_two_execution_steps_with_adapter_instance_identity() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        fs::create_dir_all(path.parent().expect("parent")).expect("parent");
+        let connection = Connection::open(&path).expect("phase two database");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                 INSERT INTO schema_migrations(version, applied_at) VALUES (2, '2026-08-04T00:00:00Z');
+                 CREATE TABLE execution_steps(
+                    id TEXT PRIMARY KEY,
+                    execution_id TEXT NOT NULL,
+                    step_index INTEGER NOT NULL,
+                    action_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    adapter_id TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    result_code TEXT,
+                    redacted_message TEXT
+                 );",
+            )
+            .expect("phase two schema");
+        drop(connection);
+
+        let storage = Storage::open(&path).expect("migrate");
+        assert_eq!(
+            storage
+                .handle()
+                .schema_version()
+                .await
+                .expect("schema version"),
+            SCHEMA_VERSION
+        );
+        storage.shutdown().await.expect("shutdown");
+
+        let connection = Connection::open(&path).expect("reopen migrated database");
+        let columns = connection
+            .prepare("PRAGMA table_info(execution_steps)")
+            .expect("table info")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("columns")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("column names");
+        assert!(columns.iter().any(|column| column == "adapter_instance_id"));
     }
 
     #[tokio::test]
@@ -1777,6 +1843,7 @@ mod tests {
                 action_type: "desktop.notification.show.v1".to_owned(),
                 status: ExecutionStepStatus::Pending,
                 adapter_id: None,
+                adapter_instance_id: None,
                 started_at: now,
                 finished_at: None,
                 result_code: None,
@@ -1789,6 +1856,7 @@ mod tests {
                 action_type: "desktop.notification.show.v1".to_owned(),
                 status: ExecutionStepStatus::Running,
                 adapter_id: Some("dev.fubun.linux".to_owned()),
+                adapter_instance_id: Some(Uuid::new_v4()),
                 started_at: now,
                 finished_at: None,
                 result_code: None,
@@ -1801,6 +1869,7 @@ mod tests {
                 action_type: "desktop.notification.show.v1".to_owned(),
                 status: ExecutionStepStatus::Succeeded,
                 adapter_id: Some("dev.fubun.linux".to_owned()),
+                adapter_instance_id: Some(Uuid::new_v4()),
                 started_at: now,
                 finished_at: Some(now),
                 result_code: Some("sent".to_owned()),

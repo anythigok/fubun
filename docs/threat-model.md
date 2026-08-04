@@ -36,15 +36,15 @@ app_idは1-128 bytesの英数字・`.`・`_`・`-`だけでslash、backslash、�
 
 ### Required Tool and Resource Type Drift
 
-Previewと実行直前Preflightは、Actionのcapabilityを持つ同一Adapterで `gtk-launch`、`xdg-open`、`notify-send` が利用可能かを確認します。Resourceは登録時と実行時のcanonical pathだけでなく、file/directory種別も比較し、symlink差し替えや種別変更時は実行しません。
+ActionからCapability、固定Tool、必要ならDesktop Entry IDを含むAdapter要件を作り、Preview、実行直前Preflight、Dispatchが同じ単一Instance選択を使います。異なるAdapterのcapability、Tool、Desktop Entry情報を合成しません。複数候補はinstance UUID文字列の昇順で選びます。Resourceは登録時と実行時のcanonical pathだけでなく、file/directory種別も比較し、symlink差し替えや種別変更時は実行しません。
 
 ### Adapter Impersonation / Disconnect
 
-Socket権限、adapter Hello、固定Registry capability、重複・長さ・制御文字制約を確認します。Adapter認証はPhase 2では同一ユーザー境界に依存します。実行中のDisconnect時はpending oneshotを同期的に解放し、Execution lockを解除して永久待機を防ぎます。
+Socket権限、adapter Hello、固定Registry capability、重複・長さ・制御文字制約を確認します。Adapter認証はPhase 2では同一ユーザー境界に依存します。実行対象を選択した後は、timeout、disconnect、protocol errorでも実Adapter IDとInstance IDを履歴へ残します。実行中のDisconnect時はpending oneshotを同期的に解放し、Execution lockを解除して永久待機を防ぎます。
 
 ### Action Timeout / Partial Execution
 
-ActionごとのtimeoutとRitual deadlineを持ち、失敗後の後続Actionを停止します。成功済みActionがある失敗は `partial` として記録し、Stepには短いredacted messageだけ保存します。TimeoutでFutureがdropしてもPending Guardがrequestを残しません。
+ActionごとのtimeoutとRitual deadlineを持ち、失敗後の後続Actionを停止します。成功済みActionがある失敗は `partial` として記録し、Stepには短いredacted messageだけ保存します。failed/partial/aborted/succeededの終端Executionにpending/running Stepを残さず、失敗後に未実行だったStepは `stopped_after_failure` としてabortedにします。TimeoutでFutureがdropしてもPending Guardがrequestを残しません。
 
 ### Sensitive stdout/stderr / Stale Approval
 

@@ -20,6 +20,13 @@
         "null"
       ]
     },
+    "adapter_instance_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
     "execution_id": {
       "type": "string",
       "format": "uuid"

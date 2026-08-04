@@ -32,7 +32,7 @@
 
 - [x] Resource、Ritual、Immutable RitualVersion、Approval、Execution domain
 - [x] 固定Action RegistryとR0/R1 policy
-- [x] v2 SQLite migrationとsingle writer CRUD
+- [x] v2/v3 SQLite migrationとsingle writer CRUD
 - [x] Adapter Hello、Capability Registry、双方向Action dispatch
 - [x] Preview、明示Activation、Pause、Manual Run、Execution History
 - [x] 固定ExecutableのみのLinux AdapterとTest Scope限定Fake Adapter E2E
@@ -57,6 +57,24 @@ PR #1の再現確認で、Production adapterが `--fake`、`FakeRunner`、偽の
 - [x] Adapter Helloの固定Registry・重複・長さ検証
 - [x] Preview/Preflightのrequired tool、Desktop Entry、ResourceKind、Canonical Path再検証
 - [x] Daemon restart時のExecutionとpending/running Step整合性を追加
+
+### Phase 2 PR #1 final alignment
+
+Head `776d4c82aad646665d40d7a49cf26ab6426b9d63` を確認した時点で、Preview/Preflightは個別のCapability・Tool・Desktop Entry照会を組み合わせる一方、DispatchはCapabilityだけをHashMap走査していたため、異なるInstanceの状態を合成し得た。Dispatch errorは選択済みAdapter Identityを返さず、Action failure後の後続Stepはpendingのまま残った。
+
+- [x] `fubun-core::adapter` にAction由来の `AdapterRequirements` と単一Instanceの共通Selection APIを追加
+- [x] Capability、固定Tool、Desktop Entryを同じInstanceで検証し、instance UUID文字列昇順で決定的に選択
+- [x] Preview、Preflight、Dispatchを共通Selectionへ統合し、分割されたAdapter状態を実行可能としない
+- [x] timeout、disconnect、protocol errorを含む選択後のDispatch errorへAdapter ID/Instance IDを付与
+- [x] Execution StepへAdapter Instance IDを保存するv3 migration、Schema、Historyを追加
+- [x] terminal Executionでpending/running Stepを残さず、後続未実行Stepを `stopped_after_failure` / `aborted` で確定
+- [x] multi-adapter、timeout、disconnect、protocol error、first/partial failure、restartの回帰Testを追加または強化
+
+### Phase 2 final assumptions
+
+- PreviewとRunの間にAdapter状態が変わり得るため、Run直前PreflightとDispatch時に同じ要件で再選択する。Preview時のInstanceを固定予約しない。
+- `adapter_instance_id` は監査用のExecution History項目であり、Ritual JSONやAction入力には含めない。
+- terminal Step確定はsingle writer queue経由で行い、stdout/stderrやResource Pathを追加保存しない。
 
 ### Deferred
 

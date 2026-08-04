@@ -10,7 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use adapter::{AdapterDispatchError, AdapterManager};
+use adapter::{
+    AdapterDispatchErrorKind, AdapterEligibilityError, AdapterManager, AdapterRequirements,
+};
 use fubun_domain::{
     ActionSpec, Approval, Execution, ExecutionStatus, ExecutionStep, ExecutionStepStatus, Resource,
     ResourceKind, ResourceScope, Ritual, RitualDefinition, RitualStatus, RitualVersion,
@@ -702,26 +704,15 @@ async fn build_preview(
     let mut warnings = Vec::new();
     for (index, action) in definition.actions.iter().enumerate() {
         let descriptor = descriptor(action);
-        let connected = adapters
-            .capability_available(descriptor.required_capability)
-            .await;
-        let required_tool = required_tool(action);
-        let required_tool_available = Some(
-            adapters
-                .capability_tool_available(descriptor.required_capability, required_tool)
-                .await,
-        );
+        let requirements = AdapterRequirements::from_action(action);
+        let (eligible, mut action_warnings) = match adapters.find_eligible(&requirements).await {
+            Ok(_) => (true, Vec::new()),
+            Err(error) => (false, vec![eligibility_warning(error).to_owned()]),
+        };
         let mut resource_exists = None;
         let mut resource_path_matches = None;
         let mut resource_kind_matches = None;
         let mut desktop_entry_exists = None;
-        let mut warning = None;
-        if !connected {
-            warning = Some("required adapter capability is unavailable".to_owned());
-        }
-        if required_tool_available == Some(false) {
-            warning = Some("required executable is unavailable".to_owned());
-        }
         match action {
             ActionSpec::LinuxPathOpen { resource_id } => match storage
                 .get_resource(*resource_id)
@@ -749,33 +740,35 @@ async fn build_preview(
                             },
                     );
                     if resource_exists != Some(true) {
-                        warning = Some("resource does not exist".to_owned());
+                        action_warnings.push("resource does not exist".to_owned());
                     }
                     if resource_path_matches != Some(true) {
-                        warning = Some("resource canonical path changed".to_owned());
+                        action_warnings.push("resource canonical path changed".to_owned());
                     }
                     if resource_kind_matches != Some(true) {
-                        warning = Some("resource type changed".to_owned());
+                        action_warnings.push("resource type changed".to_owned());
                     }
                 }
                 Err(_) => {
-                    warning = Some("resource was not found".to_owned());
+                    action_warnings.push("resource was not found".to_owned());
                 }
             },
-            ActionSpec::LinuxAppEnsureRunning { app_id } => {
-                desktop_entry_exists = adapters.desktop_entry_available(app_id).await;
+            ActionSpec::LinuxAppEnsureRunning { .. } => {
+                desktop_entry_exists = Some(eligible);
                 if desktop_entry_exists != Some(true) {
-                    warning = Some("desktop entry was not found".to_owned());
+                    action_warnings
+                        .push("desktop entry was not found on an eligible adapter".to_owned());
                 }
             }
             ActionSpec::DesktopNotificationShow { .. } => {}
         }
         if action.validate().is_err() {
-            warning = Some("action validation failed".to_owned());
+            action_warnings.push("action validation failed".to_owned());
         }
-        if let Some(message) = &warning {
+        for message in &action_warnings {
             warnings.push(format!("action {}: {message}", index + 1));
         }
+        let warning = action_warnings.into_iter().next();
         actions.push(PreviewAction {
             step_index: index as u32,
             action_type: descriptor.action_type.to_owned(),
@@ -783,8 +776,8 @@ async fn build_preview(
             idempotency: format!("{:?}", descriptor.idempotency),
             revertability: format!("{:?}", descriptor.revertability),
             required_capability: descriptor.required_capability.to_owned(),
-            adapter_connected: connected,
-            required_tool_available,
+            adapter_connected: eligible,
+            required_tool_available: Some(eligible),
             resource_exists,
             resource_path_matches,
             resource_kind_matches,
@@ -802,11 +795,12 @@ async fn build_preview(
     })
 }
 
-const fn required_tool(action: &ActionSpec) -> &'static str {
-    match action {
-        ActionSpec::LinuxAppEnsureRunning { .. } => "gtk-launch",
-        ActionSpec::LinuxPathOpen { .. } => "xdg-open",
-        ActionSpec::DesktopNotificationShow { .. } => "notify-send",
+const fn eligibility_warning(error: AdapterEligibilityError) -> &'static str {
+    match error {
+        AdapterEligibilityError::Unavailable => "no adapter is connected",
+        AdapterEligibilityError::Ineligible => {
+            "no single adapter instance satisfies the action requirements"
+        }
     }
 }
 
@@ -959,6 +953,7 @@ async fn ritual_run_response(
             action_type: action.action_type().to_owned(),
             status: ExecutionStepStatus::Pending,
             adapter_id: None,
+            adapter_instance_id: None,
             started_at: now,
             finished_at: None,
             result_code: None,
@@ -1007,30 +1002,17 @@ async fn preflight(
                 "action validation failed".to_owned(),
             )
         })?;
-        let descriptor = validate_action(action).map_err(|_| {
+        validate_action(action).map_err(|_| {
             (
                 "unknown_action".to_owned(),
                 "action is not registered".to_owned(),
             )
         })?;
-        if !adapters
-            .capability_available(descriptor.required_capability)
+        let requirements = AdapterRequirements::from_action(action);
+        adapters
+            .find_eligible(&requirements)
             .await
-        {
-            return Err((
-                "capability_unavailable".to_owned(),
-                "required adapter capability is unavailable".to_owned(),
-            ));
-        }
-        if !adapters
-            .capability_tool_available(descriptor.required_capability, required_tool(action))
-            .await
-        {
-            return Err((
-                "tool_unavailable".to_owned(),
-                "required executable is unavailable".to_owned(),
-            ));
-        }
+            .map_err(preflight_eligibility_error)?;
         let fields = approval_fields(action);
         let approved = approvals.iter().any(|approval| {
             approval.ritual_version_id == version.id
@@ -1082,18 +1064,24 @@ async fn preflight(
                     ));
                 }
             }
-            ActionSpec::LinuxAppEnsureRunning { app_id } => {
-                if adapters.desktop_entry_available(app_id).await != Some(true) {
-                    return Err((
-                        "desktop_entry_not_found".to_owned(),
-                        "desktop entry was not found".to_owned(),
-                    ));
-                }
-            }
+            ActionSpec::LinuxAppEnsureRunning { .. } => {}
             ActionSpec::DesktopNotificationShow { .. } => {}
         }
     }
     Ok(())
+}
+
+fn preflight_eligibility_error(error: AdapterEligibilityError) -> (String, String) {
+    match error {
+        AdapterEligibilityError::Unavailable => (
+            "adapter_unavailable".to_owned(),
+            "no adapter is connected".to_owned(),
+        ),
+        AdapterEligibilityError::Ineligible => (
+            "capability_unavailable".to_owned(),
+            "no single adapter instance satisfies the action requirements".to_owned(),
+        ),
+    }
 }
 
 async fn execute_steps(
@@ -1147,13 +1135,13 @@ async fn execute_steps(
         let finished = OffsetDateTime::now_utc();
         match action_result {
             Ok(dispatched) => {
-                let adapter_id = dispatched.adapter_id;
+                steps[index].adapter_id = Some(dispatched.identity.adapter_id);
+                steps[index].adapter_instance_id = Some(dispatched.identity.instance_id);
                 let ActionResult {
                     status,
                     result_code,
                     redacted_message,
                 } = dispatched.result;
-                steps[index].adapter_id = Some(adapter_id);
                 steps[index].status = match status {
                     fubun_protocol::AdapterActionStatus::Succeeded => {
                         ExecutionStepStatus::Succeeded
@@ -1189,13 +1177,17 @@ async fn execute_steps(
                 }
             }
             Err(error) => {
-                if matches!(error, AdapterDispatchError::Timeout) && deadline_bound {
+                if let Some(identity) = error.identity {
+                    steps[index].adapter_id = Some(identity.adapter_id);
+                    steps[index].adapter_instance_id = Some(identity.instance_id);
+                }
+                if error.kind == AdapterDispatchErrorKind::Timeout && deadline_bound {
                     execution.failure_code = Some("ritual_timeout".to_owned());
                     break;
                 }
                 steps[index].status = ExecutionStepStatus::Failed;
-                steps[index].result_code = Some(dispatch_error_code(&error).to_owned());
-                steps[index].redacted_message = Some(dispatch_error_message(&error).to_owned());
+                steps[index].result_code = Some(dispatch_error_code(error.kind).to_owned());
+                steps[index].redacted_message = Some(dispatch_error_message(error.kind).to_owned());
                 steps[index].finished_at = Some(finished);
                 storage
                     .update_step(steps[index].clone())
@@ -1211,34 +1203,45 @@ async fn execute_steps(
                 } else {
                     ExecutionStatus::Partial
                 };
-                execution.failure_code = Some(dispatch_error_code(&error).to_owned());
+                execution.failure_code = Some(dispatch_error_code(error.kind).to_owned());
                 break;
             }
         }
     }
+    let execution_finished = OffsetDateTime::now_utc();
     if execution.failure_code.as_deref() == Some("ritual_timeout") {
         execution.status = if successful == 0 {
             ExecutionStatus::Failed
         } else {
             ExecutionStatus::Partial
         };
-        let finished = OffsetDateTime::now_utc();
-        for step in &mut steps {
-            if matches!(
-                step.status,
-                ExecutionStepStatus::Pending | ExecutionStepStatus::Running
-            ) {
-                step.status = ExecutionStepStatus::Aborted;
-                step.finished_at = Some(finished);
-                step.result_code = Some("ritual_timeout".to_owned());
-                step.redacted_message = Some("ritual timed out".to_owned());
-                let _ = storage.update_step(step.clone()).await;
-            }
-        }
+        finalize_unfinished_steps(
+            &mut steps,
+            storage,
+            execution_finished,
+            "ritual_timeout",
+            "ritual timed out",
+        )
+        .await?;
     } else if execution.failure_code.is_none() {
         execution.status = ExecutionStatus::Succeeded;
+    } else {
+        finalize_unfinished_steps(
+            &mut steps,
+            storage,
+            execution_finished,
+            "stopped_after_failure",
+            "action was not executed because an earlier action failed",
+        )
+        .await?;
     }
-    execution.finished_at = Some(OffsetDateTime::now_utc());
+    execution.finished_at = Some(execution_finished);
+    if !terminal_step_invariant(execution.status, &steps) {
+        return Err((
+            "internal_error".to_owned(),
+            "terminal execution has a non-terminal step".to_owned(),
+        ));
+    }
     storage
         .update_execution(execution.clone())
         .await
@@ -1258,6 +1261,54 @@ async fn execute_steps(
     Ok((execution, steps))
 }
 
+async fn finalize_unfinished_steps(
+    steps: &mut [ExecutionStep],
+    storage: &StorageHandle,
+    finished_at: OffsetDateTime,
+    result_code: &str,
+    redacted_message: &str,
+) -> Result<(), (String, String)> {
+    for step in steps {
+        if matches!(
+            step.status,
+            ExecutionStepStatus::Pending | ExecutionStepStatus::Running
+        ) {
+            step.status = ExecutionStepStatus::Aborted;
+            step.finished_at = Some(finished_at);
+            step.result_code = Some(result_code.to_owned());
+            step.redacted_message = Some(redacted_message.to_owned());
+            storage.update_step(step.clone()).await.map_err(|_| {
+                (
+                    "internal_error".to_owned(),
+                    "execution step could not be finalized".to_owned(),
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn terminal_step_invariant(status: ExecutionStatus, steps: &[ExecutionStep]) -> bool {
+    if !matches!(
+        status,
+        ExecutionStatus::Succeeded
+            | ExecutionStatus::Failed
+            | ExecutionStatus::Partial
+            | ExecutionStatus::Aborted
+    ) {
+        return true;
+    }
+    steps.iter().all(|step| {
+        matches!(
+            step.status,
+            ExecutionStepStatus::Succeeded
+                | ExecutionStepStatus::Skipped
+                | ExecutionStepStatus::Failed
+                | ExecutionStepStatus::Aborted
+        )
+    })
+}
+
 fn redact_message(message: &str) -> String {
     message
         .chars()
@@ -1266,22 +1317,22 @@ fn redact_message(message: &str) -> String {
         .collect()
 }
 
-const fn dispatch_error_code(error: &AdapterDispatchError) -> &'static str {
+const fn dispatch_error_code(error: AdapterDispatchErrorKind) -> &'static str {
     match error {
-        AdapterDispatchError::Unavailable => "adapter_unavailable",
-        AdapterDispatchError::CapabilityUnavailable => "capability_unavailable",
-        AdapterDispatchError::Timeout => "action_timeout",
-        AdapterDispatchError::Disconnected => "adapter_disconnected",
-        AdapterDispatchError::Protocol => "protocol_error",
+        AdapterDispatchErrorKind::Unavailable => "adapter_unavailable",
+        AdapterDispatchErrorKind::CapabilityUnavailable => "capability_unavailable",
+        AdapterDispatchErrorKind::Timeout => "action_timeout",
+        AdapterDispatchErrorKind::Disconnected => "adapter_disconnected",
+        AdapterDispatchErrorKind::Protocol => "protocol_error",
     }
 }
-const fn dispatch_error_message(error: &AdapterDispatchError) -> &'static str {
+const fn dispatch_error_message(error: AdapterDispatchErrorKind) -> &'static str {
     match error {
-        AdapterDispatchError::Unavailable => "no adapter is connected",
-        AdapterDispatchError::CapabilityUnavailable => "required capability is unavailable",
-        AdapterDispatchError::Timeout => "adapter action timed out",
-        AdapterDispatchError::Disconnected => "adapter disconnected",
-        AdapterDispatchError::Protocol => "adapter protocol error",
+        AdapterDispatchErrorKind::Unavailable => "no adapter is connected",
+        AdapterDispatchErrorKind::CapabilityUnavailable => "required capability is unavailable",
+        AdapterDispatchErrorKind::Timeout => "adapter action timed out",
+        AdapterDispatchErrorKind::Disconnected => "adapter disconnected",
+        AdapterDispatchErrorKind::Protocol => "adapter protocol error",
     }
 }
 

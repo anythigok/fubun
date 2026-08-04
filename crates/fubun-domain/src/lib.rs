@@ -476,6 +476,8 @@ pub struct ExecutionStep {
     pub status: ExecutionStepStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_instance_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub started_at: OffsetDateTime,

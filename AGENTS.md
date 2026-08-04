@@ -18,3 +18,5 @@
 - Adapter Helloは固定RegistryのCapability、重複なし、長さ・制御文字制約を満たす場合だけ受理する。
 - Pending ActionはCancellation、Timeout、Disconnect、Shutdownの全経路で解放する。
 - PreviewとRun直前のPreflightで必要ToolとResourceKindを再確認する。
+- Preview、Preflight、Dispatchは同一の単一Adapter Instance適格性判定を使い、Adapter状態を合成しない。
+- terminal Executionにpending/running Stepを残さず、選択済みAdapter Identityを成功・失敗の両方で履歴へ残す。

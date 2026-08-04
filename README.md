@@ -13,6 +13,8 @@ Phase 2は、ユーザーが明示的に作成したRitualをPreview、Approval�
 - Ritualは固定Action RegistryのR0/R1だけを許可し、生Path・任意Executable・Shell Commandを受け取らない。
 - Draft・Paused Ritualは実行せず、Version更新時は旧Approvalを失効させる。
 - stdout/stderr全文を保存せず、短いredacted messageだけをExecution Historyへ記録する。
+- Preview、Preflight、Dispatchは同じ単一Adapter InstanceのCapability・固定Tool・Desktop Entryを確認し、timeout/disconnect/protocol errorでも選択済みAdapterのIdentityを履歴へ残す。
+- 終端したExecutionにはpending/running Stepを残さず、失敗後に未実行だったStepはabortedとして記録する。
 - data directoryは0700、databaseとsocketは0600。
 
 ## 必要環境
