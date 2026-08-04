@@ -1339,7 +1339,10 @@ fn execute_operation(
         Operation::ListSessions(workspace) => Ok(StorageResponse::Sessions(list_sessions(connection, workspace)?)),
         Operation::GetSession(id) => Ok(StorageResponse::Session(get_session(connection, id)?)),
         Operation::ListSuggestions { status, workspace_resource_id } => Ok(StorageResponse::Suggestions(list_suggestions(connection, status, workspace_resource_id)?)),
-        Operation::GetSuggestion(id) => Ok(StorageResponse::Suggestion(get_suggestion(connection, id)?)),
+        Operation::GetSuggestion(id) => {
+            let (suggestion, status, snoozed_until, accepted_ritual_id) = get_suggestion(connection, id)?;
+            Ok(StorageResponse::Suggestion { suggestion, status, snoozed_until, accepted_ritual_id })
+        }
         Operation::SetSuggestionStatus { suggestion_id, status, until } => {
             let existing = get_suggestion(connection, suggestion_id)?;
             let current = existing.1;
@@ -1352,7 +1355,8 @@ fn execute_operation(
                 return Err(StorageError::SuggestionInvalidState);
             }
             connection.execute("UPDATE suggestions SET status=?1, snoozed_until=?2, updated_at=?3 WHERE id=?4", params![suggestion_status_name(status), until.map(format_ts).transpose()?, format_ts(OffsetDateTime::now_utc())?, suggestion_id.to_string()])?;
-            Ok(StorageResponse::Suggestion(get_suggestion(connection, suggestion_id)?))
+            let (suggestion, status, snoozed_until, accepted_ritual_id) = get_suggestion(connection, suggestion_id)?;
+            Ok(StorageResponse::Suggestion { suggestion, status, snoozed_until, accepted_ritual_id })
         }
         Operation::AcceptSuggestion { suggestion_id, name: _, ritual, version, definition } => {
             let transaction = connection.transaction()?;
