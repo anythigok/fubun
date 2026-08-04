@@ -187,6 +187,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
   if (typeof message !== "object" || message === null) return false;
   const record = message as Record<string, unknown>;
   if (record.type === "status") {
+    try { connect(); } catch { /* status remains disconnected until an explicit retry */ }
     sendResponse({ native_host: hostReady, core: hostReady });
     return false;
   }
