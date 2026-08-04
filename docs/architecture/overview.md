@@ -18,6 +18,8 @@ fubun-cli / fubun-linux-adapter
 
 Ritualは `draft -> active -> paused/archived` の状態を持ち、各Versionはimmutableです。ActivationはPreview成功と `--approve` を要求し、Versionのcontent hashが変われば旧Approvalを使えません。Executionは逐次Action、overall timeout、単一Ritual lock、redacted historyを持ちます。
 
-CoreとAdapterは長時間の双方向Unix socket接続を使います。Coreはcapabilityを持つAdapterを選び、request/action execution IDごとのoneshot pending requestをtimeout・disconnect・shutdown時に必ず解放します。
+CoreとAdapterは長時間の双方向Unix socket接続を使います。Coreは固定Registryのcapabilityだけを宣言するAdapterを選び、dispatch結果の実Adapter IDをExecution Stepへ保存します。request/action execution IDごとのpending requestは同期RAII Guardで所有し、Futureのdropを含むcancel、timeout、disconnect、shutdown時に必ず解放します。Ritual全体は外側Futureを強制dropせず、deadlineの残り時間をAction timeoutへ渡します。
+
+Previewと実行直前Preflightは、capabilityだけでなく同一Adapterのrequired executable、Desktop Entry、Resourceのcanonical pathとfile/directory種別を確認します。Production Linux Adapterは固定Executableだけを使用し、Fake実行経路を持ちません。
 
 外部network client、TCP listener、Pattern Miner、Rule、自動Trigger、GUIはありません。

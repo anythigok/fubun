@@ -35,7 +35,7 @@
 - [x] v2 SQLite migrationとsingle writer CRUD
 - [x] Adapter Hello、Capability Registry、双方向Action dispatch
 - [x] Preview、明示Activation、Pause、Manual Run、Execution History
-- [x] 固定ExecutableのみのLinux AdapterとFake Adapter E2E
+- [x] 固定ExecutableのみのLinux AdapterとTest Scope限定Fake Adapter E2E
 - [x] CLI、Schema、ADR、Threat Model、Fixture、CI更新
 - [x] GitHub feature branch pushとDraft PR（実装完了）
 
@@ -44,7 +44,19 @@
 - Adapter statusは接続時のXDG Desktop Entry一覧をsnapshotとして扱う。
 - `ensure_running`の/proc判定は同一uidのexe basenameだけを比較し、読取不能時は安全にlaunchへ進む。
 - Canonical JSONは厳格なRust struct再シリアライズで生成し、入力WhitespaceはHash対象にしない。
-- Previewのadapter接続・resource・desktop entry不在は実行不可のwarningとする。
+- Previewのadapter接続・required tool・resource・resource kind・desktop entry不在は実行不可のwarningとする。
+
+### Phase 2 PR #1 hardening
+
+PR #1の再現確認で、Production adapterが `--fake`、`FakeRunner`、偽のtool/desktop-entry statusを受理していたこと、Coreの外側Ritual timeoutがdispatch Futureをdropした場合にpending mapの削除を型で保証していなかったこと、既存Disconnect testが実行前切断だけだったことを確認した。加えて、domainとadapterのapp_id規則が重複しハイフンを拒否していたこと、Execution Stepのadapter_idが固定値だったこと、Preview/Preflightがrequired toolとResourceKindを検証していなかったこと、再起動時にExecution Stepがpending/runningのまま残ることをコードから再現した。
+
+- [x] Production Fake経路を削除し、Test専用FakeをIntegration Testへ限定
+- [x] 同期RAII Pending GuardとRitual Deadlineでcancel/timeout/disconnect/shutdown cleanupを保証
+- [x] 実行中Adapter切断、再実行、adapter identity履歴の回帰Testを追加
+- [x] app_id共有検証（`-`許可、1-128 bytes、path/control/whitespace拒否）
+- [x] Adapter Helloの固定Registry・重複・長さ検証
+- [x] Preview/Preflightのrequired tool、Desktop Entry、ResourceKind、Canonical Path再検証
+- [x] Daemon restart時のExecutionとpending/running Step整合性を追加
 
 ### Deferred
 

@@ -2,16 +2,13 @@
 
 use std::{
     env, fs, io,
-    os::unix::{
-        fs::{MetadataExt, PermissionsExt},
-        process::ExitStatusExt,
-    },
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     pin::Pin,
     process::ExitStatus,
 };
 
-use fubun_domain::{ActionSpec, ResourceKind};
+use fubun_domain::{validate_app_id, ActionSpec, ResourceKind};
 use fubun_protocol::{
     read_json_frame, write_json_frame, ActionResult, AdapterActionStatus, AdapterHello,
     AdapterRequestBody, AdapterRequestEnvelope, AdapterResponseBody, AdapterResponseEnvelope,
@@ -34,9 +31,6 @@ trait ExecutableRunner: Send + Sync {
         executable: &'a str,
         args: &'a [&'a str],
     ) -> Pin<Box<dyn FutureStatus + 'a>>;
-    fn is_fake(&self) -> bool {
-        false
-    }
 }
 
 trait FutureStatus: std::future::Future<Output = io::Result<ExitStatus>> + Send {}
@@ -70,22 +64,6 @@ impl ExecutableRunner for ProcessRunner {
     }
 }
 
-#[derive(Clone, Copy)]
-struct FakeRunner;
-
-impl ExecutableRunner for FakeRunner {
-    fn run<'a>(
-        &'a self,
-        _executable: &'a str,
-        _args: &'a [&'a str],
-    ) -> Pin<Box<dyn FutureStatus + 'a>> {
-        Box::pin(async { Ok(ExitStatus::from_raw(0)) })
-    }
-    fn is_fake(&self) -> bool {
-        true
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -93,12 +71,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compact()
         .init();
     let mut socket_path = None;
-    let mut fake = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--socket" => socket_path = args.next().map(PathBuf::from),
-            "--fake" => fake = true,
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
     }
@@ -118,11 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|value| (*value).to_owned())
                 .collect(),
-            status: if fake {
-                fake_status()
-            } else {
-                collect_status()
-            },
+            status: collect_status(),
         }),
     };
     let hello_id = hello.request_id;
@@ -140,11 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("adapter handshake rejected".into());
     }
-    let runner: Box<dyn ExecutableRunner> = if fake {
-        Box::new(FakeRunner)
-    } else {
-        Box::new(ProcessRunner)
-    };
+    let runner: Box<dyn ExecutableRunner> = Box::new(ProcessRunner);
     while let Some(request) = read_json_frame::<_, AdapterRequestEnvelope>(&mut stream).await? {
         let response = handle_request(request, runner.as_ref()).await;
         write_json_frame(&mut stream, &response).await?;
@@ -171,19 +139,6 @@ fn collect_status() -> AdapterStatusSnapshot {
             })
             .collect(),
         desktop_entry_ids: desktop_entry_ids(),
-    }
-}
-
-fn fake_status() -> AdapterStatusSnapshot {
-    AdapterStatusSnapshot {
-        tools: ["gtk-launch", "xdg-open", "notify-send"]
-            .into_iter()
-            .map(|name| AdapterToolStatus {
-                name: name.to_owned(),
-                available: true,
-            })
-            .collect(),
-        desktop_entry_ids: vec!["code".to_owned()],
     }
 }
 
@@ -275,7 +230,7 @@ async fn execute_action(
         ActionSpec::LinuxAppEnsureRunning { app_id } => ensure_running(&app_id, runner).await,
         ActionSpec::LinuxPathOpen { resource_id } => open_path(resource_id, resource, runner).await,
         ActionSpec::DesktopNotificationShow { title, body } => {
-            if !executable_exists("notify-send") && !runner.is_fake() {
+            if !executable_exists("notify-send") {
                 return Err("notify-send is unavailable".to_owned());
             }
             let status = runner
@@ -299,21 +254,7 @@ async fn ensure_running(
     app_id: &str,
     runner: &dyn ExecutableRunner,
 ) -> Result<ActionResult, String> {
-    if app_id.is_empty()
-        || app_id.contains('/')
-        || !app_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_')
-    {
-        return Err("invalid desktop entry id".to_owned());
-    }
-    if runner.is_fake() {
-        return Ok(ActionResult {
-            status: AdapterActionStatus::Succeeded,
-            result_code: "launched".to_owned(),
-            redacted_message: "fake launch completed".to_owned(),
-        });
-    }
+    validate_app_id(app_id).map_err(|_| "invalid desktop entry id".to_owned())?;
     let entry = find_desktop_entry(app_id).ok_or_else(|| "desktop entry not found".to_owned())?;
     let executable = desktop_exec_basename(&entry)
         .ok_or_else(|| "desktop entry has no fixed executable".to_owned())?;
@@ -324,7 +265,7 @@ async fn ensure_running(
             redacted_message: "application already running".to_owned(),
         });
     }
-    if !executable_exists("gtk-launch") && !runner.is_fake() {
+    if !executable_exists("gtk-launch") {
         return Err("gtk-launch is unavailable".to_owned());
     }
     let status = runner
@@ -368,7 +309,7 @@ async fn open_path(
     if !kind_matches {
         return Err("resource type changed".to_owned());
     }
-    if !executable_exists("xdg-open") && !runner.is_fake() {
+    if !executable_exists("xdg-open") {
         return Err("xdg-open is unavailable".to_owned());
     }
     let path_text = path.to_string_lossy().into_owned();
@@ -448,10 +389,18 @@ mod tests {
     use super::*;
     #[test]
     fn app_ids_do_not_accept_paths() {
-        assert!("../x".contains('/'));
-        assert!("safe.app"
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_'));
+        for value in [
+            "code",
+            "google-chrome",
+            "org.example.App",
+            "org_example-App-1",
+        ] {
+            assert!(validate_app_id(value).is_ok(), "{value}");
+        }
+        for value in ["../x", "dir/app", r"dir\app", "app name", ""] {
+            assert!(validate_app_id(value).is_err(), "{value:?}");
+        }
+        assert!(validate_app_id(&"a".repeat(129)).is_err());
     }
     #[test]
     fn desktop_directories_never_use_user_supplied_path() {

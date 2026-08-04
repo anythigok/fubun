@@ -7,7 +7,7 @@ use std::{
     fs,
     os::unix::fs::{FileTypeExt, PermissionsExt},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use adapter::{AdapterDispatchError, AdapterManager};
@@ -173,6 +173,7 @@ async fn serve(
         }
     }
 
+    adapters.shutdown().await;
     while let Some(result) = connections.join_next().await {
         if let Err(error) = result {
             warn!(%error, "IPC connection task panicked during shutdown");
@@ -263,6 +264,14 @@ async fn handle_adapter_connection(
     adapters: AdapterManager,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), CoreError> {
+    if let Err(error) = AdapterManager::validate_hello(&hello) {
+        write_json_frame(
+            &mut stream,
+            &ResponseEnvelope::error(request_id, "protocol_error", error.to_string()),
+        )
+        .await?;
+        return Ok(());
+    }
     let ack = ClientHelloAck {
         server_name: "fubund".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -276,7 +285,14 @@ async fn handle_adapter_connection(
     let (reader, mut writer) = stream.into_split();
     let (sender, mut receiver) = mpsc::channel(32);
     let instance_id = hello.instance_id;
-    adapters.register(hello, sender).await;
+    if let Err(error) = adapters.register(hello, sender).await {
+        write_json_frame(
+            &mut writer,
+            &ResponseEnvelope::error(request_id, "protocol_error", error.to_string()),
+        )
+        .await?;
+        return Ok(());
+    }
     let writer_task = tokio::spawn(async move {
         while let Some(request) = receiver.recv().await {
             if write_json_frame(&mut writer, &request).await.is_err() {
@@ -689,12 +705,22 @@ async fn build_preview(
         let connected = adapters
             .capability_available(descriptor.required_capability)
             .await;
+        let required_tool = required_tool(action);
+        let required_tool_available = Some(
+            adapters
+                .capability_tool_available(descriptor.required_capability, required_tool)
+                .await,
+        );
         let mut resource_exists = None;
         let mut resource_path_matches = None;
+        let mut resource_kind_matches = None;
         let mut desktop_entry_exists = None;
         let mut warning = None;
         if !connected {
             warning = Some("required adapter capability is unavailable".to_owned());
+        }
+        if required_tool_available == Some(false) {
+            warning = Some("required executable is unavailable".to_owned());
         }
         match action {
             ActionSpec::LinuxPathOpen { resource_id } => match storage
@@ -710,11 +736,26 @@ async fn build_preview(
                                 .map(|value| value.to_string_lossy() == resource.canonical_locator)
                                 .unwrap_or(false),
                     );
+                    resource_kind_matches = Some(
+                        path.exists()
+                            && match fs::metadata(path) {
+                                Ok(metadata) if metadata.is_file() => {
+                                    resource.kind == ResourceKind::File
+                                }
+                                Ok(metadata) if metadata.is_dir() => {
+                                    resource.kind == ResourceKind::Directory
+                                }
+                                _ => false,
+                            },
+                    );
                     if resource_exists != Some(true) {
                         warning = Some("resource does not exist".to_owned());
                     }
                     if resource_path_matches != Some(true) {
                         warning = Some("resource canonical path changed".to_owned());
+                    }
+                    if resource_kind_matches != Some(true) {
+                        warning = Some("resource type changed".to_owned());
                     }
                 }
                 Err(_) => {
@@ -729,6 +770,9 @@ async fn build_preview(
             }
             ActionSpec::DesktopNotificationShow { .. } => {}
         }
+        if action.validate().is_err() {
+            warning = Some("action validation failed".to_owned());
+        }
         if let Some(message) = &warning {
             warnings.push(format!("action {}: {message}", index + 1));
         }
@@ -740,8 +784,10 @@ async fn build_preview(
             revertability: format!("{:?}", descriptor.revertability),
             required_capability: descriptor.required_capability.to_owned(),
             adapter_connected: connected,
+            required_tool_available,
             resource_exists,
             resource_path_matches,
+            resource_kind_matches,
             desktop_entry_exists,
             warning,
         });
@@ -754,6 +800,14 @@ async fn build_preview(
         warnings: warnings.clone(),
         executable: warnings.is_empty(),
     })
+}
+
+const fn required_tool(action: &ActionSpec) -> &'static str {
+    match action {
+        ActionSpec::LinuxAppEnsureRunning { .. } => "gtk-launch",
+        ActionSpec::LinuxPathOpen { .. } => "xdg-open",
+        ActionSpec::DesktopNotificationShow { .. } => "notify-send",
+    }
 }
 
 async fn ritual_activate_response(
@@ -947,6 +1001,12 @@ async fn preflight(
         )
     })?;
     for action in &definition.actions {
+        action.validate().map_err(|_| {
+            (
+                "invalid_ritual".to_owned(),
+                "action validation failed".to_owned(),
+            )
+        })?;
         let descriptor = validate_action(action).map_err(|_| {
             (
                 "unknown_action".to_owned(),
@@ -960,6 +1020,15 @@ async fn preflight(
             return Err((
                 "capability_unavailable".to_owned(),
                 "required adapter capability is unavailable".to_owned(),
+            ));
+        }
+        if !adapters
+            .capability_tool_available(descriptor.required_capability, required_tool(action))
+            .await
+        {
+            return Err((
+                "tool_unavailable".to_owned(),
+                "required executable is unavailable".to_owned(),
             ));
         }
         let fields = approval_fields(action);
@@ -1001,6 +1070,17 @@ async fn preflight(
                         "resource canonical path changed".to_owned(),
                     ));
                 }
+                let kind_matches = match fs::metadata(path) {
+                    Ok(metadata) if metadata.is_file() => resource.kind == ResourceKind::File,
+                    Ok(metadata) if metadata.is_dir() => resource.kind == ResourceKind::Directory,
+                    _ => false,
+                };
+                if !kind_matches {
+                    return Err((
+                        "resource_changed".to_owned(),
+                        "resource type changed".to_owned(),
+                    ));
+                }
             }
             ActionSpec::LinuxAppEnsureRunning { app_id } => {
                 if adapters.desktop_entry_available(app_id).await != Some(true) {
@@ -1024,157 +1104,139 @@ async fn execute_steps(
     adapters: &AdapterManager,
 ) -> Result<(Execution, Vec<ExecutionStep>), (String, String)> {
     let overall = Duration::from_secs(u64::from(definition.execution.timeout_seconds));
-    let run = async {
-        let mut successful = 0usize;
-        for (index, action) in definition.actions.into_iter().enumerate() {
-            let started = OffsetDateTime::now_utc();
-            steps[index].status = ExecutionStepStatus::Running;
-            steps[index].started_at = started;
-            steps[index].adapter_id = Some("dev.fubun.linux".to_owned());
-            storage
-                .update_step(steps[index].clone())
-                .await
-                .map_err(|_| {
+    let deadline = Instant::now() + overall;
+    let mut successful = 0usize;
+    for (index, action) in definition.actions.into_iter().enumerate() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            execution.failure_code = Some("ritual_timeout".to_owned());
+            break;
+        }
+        let started = OffsetDateTime::now_utc();
+        steps[index].status = ExecutionStepStatus::Running;
+        steps[index].started_at = started;
+        storage
+            .update_step(steps[index].clone())
+            .await
+            .map_err(|_| {
+                (
+                    "internal_error".to_owned(),
+                    "execution step could not be updated".to_owned(),
+                )
+            })?;
+        let resolved = match &action {
+            ActionSpec::LinuxPathOpen { resource_id } => {
+                let resource = storage.get_resource(*resource_id).await.map_err(|_| {
                     (
-                        "internal_error".to_owned(),
-                        "execution step could not be updated".to_owned(),
+                        "resource_not_found".to_owned(),
+                        "resource was not found".to_owned(),
                     )
                 })?;
-            let resolved = match &action {
-                ActionSpec::LinuxPathOpen { resource_id } => {
-                    let resource = storage.get_resource(*resource_id).await.map_err(|_| {
-                        (
-                            "resource_not_found".to_owned(),
-                            "resource was not found".to_owned(),
-                        )
-                    })?;
-                    Some(ResolvedResource {
-                        resource_id: *resource_id,
-                        kind: resource.kind,
-                        canonical_locator: resource.canonical_locator,
-                    })
-                }
-                _ => None,
-            };
-            let action_timeout = Duration::from_millis(descriptor(&action).default_timeout_ms);
-            let action_result = adapters.execute(action, resolved, action_timeout).await;
-            let finished = OffsetDateTime::now_utc();
-            match action_result {
-                Ok(ActionResult {
+                Some(ResolvedResource {
+                    resource_id: *resource_id,
+                    kind: resource.kind,
+                    canonical_locator: resource.canonical_locator,
+                })
+            }
+            _ => None,
+        };
+        let default_timeout = Duration::from_millis(descriptor(&action).default_timeout_ms);
+        let deadline_bound = remaining <= default_timeout;
+        let action_timeout = default_timeout.min(remaining);
+        let action_result = adapters.execute(action, resolved, action_timeout).await;
+        let finished = OffsetDateTime::now_utc();
+        match action_result {
+            Ok(dispatched) => {
+                let adapter_id = dispatched.adapter_id;
+                let ActionResult {
                     status,
                     result_code,
                     redacted_message,
-                }) => {
-                    steps[index].status = match status {
-                        fubun_protocol::AdapterActionStatus::Succeeded => {
-                            ExecutionStepStatus::Succeeded
-                        }
-                        fubun_protocol::AdapterActionStatus::Skipped => {
-                            ExecutionStepStatus::Skipped
-                        }
-                        fubun_protocol::AdapterActionStatus::Failed => ExecutionStepStatus::Failed,
-                    };
-                    steps[index].result_code = Some(result_code);
-                    steps[index].redacted_message = Some(redact_message(&redacted_message));
-                    steps[index].finished_at = Some(finished);
-                    storage
-                        .update_step(steps[index].clone())
-                        .await
-                        .map_err(|_| {
-                            (
-                                "internal_error".to_owned(),
-                                "execution step could not be updated".to_owned(),
-                            )
-                        })?;
-                    if matches!(
-                        steps[index].status,
-                        ExecutionStepStatus::Succeeded | ExecutionStepStatus::Skipped
-                    ) {
-                        successful += 1;
-                    } else {
-                        execution.status = if successful == 0 {
-                            ExecutionStatus::Failed
-                        } else {
-                            ExecutionStatus::Partial
-                        };
-                        execution.failure_code = Some("action_failed".to_owned());
-                        break;
+                } = dispatched.result;
+                steps[index].adapter_id = Some(adapter_id);
+                steps[index].status = match status {
+                    fubun_protocol::AdapterActionStatus::Succeeded => {
+                        ExecutionStepStatus::Succeeded
                     }
-                }
-                Err(error) => {
-                    steps[index].status = match error {
-                        AdapterDispatchError::Timeout => ExecutionStepStatus::Failed,
-                        AdapterDispatchError::Disconnected => ExecutionStepStatus::Failed,
-                        _ => ExecutionStepStatus::Failed,
-                    };
-                    steps[index].result_code = Some(dispatch_error_code(&error).to_owned());
-                    steps[index].redacted_message = Some(dispatch_error_message(&error).to_owned());
-                    steps[index].finished_at = Some(finished);
-                    storage
-                        .update_step(steps[index].clone())
-                        .await
-                        .map_err(|_| {
-                            (
-                                "internal_error".to_owned(),
-                                "execution step could not be updated".to_owned(),
-                            )
-                        })?;
+                    fubun_protocol::AdapterActionStatus::Skipped => ExecutionStepStatus::Skipped,
+                    fubun_protocol::AdapterActionStatus::Failed => ExecutionStepStatus::Failed,
+                };
+                steps[index].result_code = Some(result_code);
+                steps[index].redacted_message = Some(redact_message(&redacted_message));
+                steps[index].finished_at = Some(finished);
+                storage
+                    .update_step(steps[index].clone())
+                    .await
+                    .map_err(|_| {
+                        (
+                            "internal_error".to_owned(),
+                            "execution step could not be updated".to_owned(),
+                        )
+                    })?;
+                if matches!(
+                    steps[index].status,
+                    ExecutionStepStatus::Succeeded | ExecutionStepStatus::Skipped
+                ) {
+                    successful += 1;
+                } else {
                     execution.status = if successful == 0 {
                         ExecutionStatus::Failed
                     } else {
                         ExecutionStatus::Partial
                     };
-                    execution.failure_code = Some(dispatch_error_code(&error).to_owned());
+                    execution.failure_code = Some("action_failed".to_owned());
                     break;
                 }
             }
-        }
-        if execution.failure_code.is_none() {
-            execution.status = ExecutionStatus::Succeeded;
-        }
-        Ok::<(), (String, String)>(())
-    };
-    match tokio::time::timeout(overall, run).await {
-        Ok(Ok(())) => {}
-        Ok(Err((code, _message))) => {
-            execution.status = if steps.iter().any(|step| {
-                matches!(
-                    step.status,
-                    ExecutionStepStatus::Succeeded | ExecutionStepStatus::Skipped
-                )
-            }) {
-                ExecutionStatus::Partial
-            } else {
-                ExecutionStatus::Failed
-            };
-            execution.failure_code = Some(code);
-        }
-        Err(_) => {
-            execution.status = if steps.iter().any(|step| {
-                matches!(
-                    step.status,
-                    ExecutionStepStatus::Succeeded | ExecutionStepStatus::Skipped
-                )
-            }) {
-                ExecutionStatus::Partial
-            } else {
-                ExecutionStatus::Failed
-            };
-            execution.failure_code = Some("ritual_timeout".to_owned());
-            let finished = OffsetDateTime::now_utc();
-            for step in &mut steps {
-                if matches!(
-                    step.status,
-                    ExecutionStepStatus::Pending | ExecutionStepStatus::Running
-                ) {
-                    step.status = ExecutionStepStatus::Aborted;
-                    step.finished_at = Some(finished);
-                    step.result_code = Some("ritual_timeout".to_owned());
-                    step.redacted_message = Some("ritual timed out".to_owned());
-                    let _ = storage.update_step(step.clone()).await;
+            Err(error) => {
+                if matches!(error, AdapterDispatchError::Timeout) && deadline_bound {
+                    execution.failure_code = Some("ritual_timeout".to_owned());
+                    break;
                 }
+                steps[index].status = ExecutionStepStatus::Failed;
+                steps[index].result_code = Some(dispatch_error_code(&error).to_owned());
+                steps[index].redacted_message = Some(dispatch_error_message(&error).to_owned());
+                steps[index].finished_at = Some(finished);
+                storage
+                    .update_step(steps[index].clone())
+                    .await
+                    .map_err(|_| {
+                        (
+                            "internal_error".to_owned(),
+                            "execution step could not be updated".to_owned(),
+                        )
+                    })?;
+                execution.status = if successful == 0 {
+                    ExecutionStatus::Failed
+                } else {
+                    ExecutionStatus::Partial
+                };
+                execution.failure_code = Some(dispatch_error_code(&error).to_owned());
+                break;
             }
         }
+    }
+    if execution.failure_code.as_deref() == Some("ritual_timeout") {
+        execution.status = if successful == 0 {
+            ExecutionStatus::Failed
+        } else {
+            ExecutionStatus::Partial
+        };
+        let finished = OffsetDateTime::now_utc();
+        for step in &mut steps {
+            if matches!(
+                step.status,
+                ExecutionStepStatus::Pending | ExecutionStepStatus::Running
+            ) {
+                step.status = ExecutionStepStatus::Aborted;
+                step.finished_at = Some(finished);
+                step.result_code = Some("ritual_timeout".to_owned());
+                step.redacted_message = Some("ritual timed out".to_owned());
+                let _ = storage.update_step(step.clone()).await;
+            }
+        }
+    } else if execution.failure_code.is_none() {
+        execution.status = ExecutionStatus::Succeeded;
     }
     execution.finished_at = Some(OffsetDateTime::now_utc());
     storage

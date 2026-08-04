@@ -5,7 +5,7 @@
 
 ## Decision
 
-CoreはValidation、Policy、Plan、Historyだけを所有し、gtk-launch/xdg-open/notify-sendはLinux Adapterだけが固定引数で呼ぶ。CoreはOS Commandを直接実行しない。
+CoreはValidation、Policy、Plan、Historyだけを所有し、gtk-launch/xdg-open/notify-sendはLinux Adapterだけが固定引数で呼ぶ。CoreはOS Commandを直接実行しない。Production Linux Adapterは実環境の固定Executableだけを使い、Fake Runnerや偽のstatus経路を持たない。副作用なしのFake AdapterはIntegration Testのprotocol supportに限定する。
 
 ## Rationale
 

@@ -32,15 +32,19 @@ RitualとAction RequestはResource IDだけを受け取り、登録時と実行�
 
 ### Malicious Desktop Entry ID
 
-app_idは英数字・`.`・`_`だけでslashを拒否し、Desktop Entry標準ディレクトリ内の `<id>.desktop` だけを解決します。Coreから任意Executable pathは渡されません。
+app_idは1-128 bytesの英数字・`.`・`_`・`-`だけでslash、backslash、空白、制御文字を拒否し、Desktop Entry標準ディレクトリ内の `<id>.desktop` だけを解決します。Coreから任意Executable pathは渡されません。
+
+### Required Tool and Resource Type Drift
+
+Previewと実行直前Preflightは、Actionのcapabilityを持つ同一Adapterで `gtk-launch`、`xdg-open`、`notify-send` が利用可能かを確認します。Resourceは登録時と実行時のcanonical pathだけでなく、file/directory種別も比較し、symlink差し替えや種別変更時は実行しません。
 
 ### Adapter Impersonation / Disconnect
 
-Socket権限、adapter Hello、capability一致を確認します。Adapter認証はPhase 2では同一ユーザー境界に依存します。Disconnect時はpending oneshotを解放し、永久待機を防ぎます。
+Socket権限、adapter Hello、固定Registry capability、重複・長さ・制御文字制約を確認します。Adapter認証はPhase 2では同一ユーザー境界に依存します。実行中のDisconnect時はpending oneshotを同期的に解放し、Execution lockを解除して永久待機を防ぎます。
 
 ### Action Timeout / Partial Execution
 
-ActionごとのtimeoutとRitual overall timeoutを持ち、失敗後の後続Actionを停止します。成功済みActionがある失敗は `partial` として記録し、Stepには短いredacted messageだけ保存します。
+ActionごとのtimeoutとRitual deadlineを持ち、失敗後の後続Actionを停止します。成功済みActionがある失敗は `partial` として記録し、Stepには短いredacted messageだけ保存します。TimeoutでFutureがdropしてもPending Guardがrequestを残しません。
 
 ### Sensitive stdout/stderr / Stale Approval
 
@@ -57,6 +61,10 @@ directory 0700、database 0600で他ユーザーのreadを制限します。保�
 ### Dependency Compromise
 
 依存を最小化・version固定し、`Cargo.lock` とCIを使用します。release前にdependency auditとprovenance確認を行いますが、自動audit serviceは追加しません。
+
+### Restart Consistency
+
+Daemon再起動時にrunning Executionをabortedへ遷移し、同じExecutionのpending/running Stepも `daemon_restarted` と終了時刻を付けてabortedにします。完了済みStepは保持し、実行Lockは削除します。
 
 ## Out of scope
 

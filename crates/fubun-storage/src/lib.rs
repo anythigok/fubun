@@ -1341,6 +1341,17 @@ fn abort_running_executions(connection: &Connection) -> Result<(), StorageError>
          WHERE status = 'running'",
         params![now],
     )?;
+    connection.execute(
+        "UPDATE execution_steps
+         SET status = 'aborted', finished_at = ?1, result_code = 'daemon_restarted',
+             redacted_message = 'execution aborted because daemon restarted'
+         WHERE status IN ('running', 'pending')
+           AND execution_id IN (
+               SELECT id FROM executions
+               WHERE status = 'aborted' AND failure_code = 'daemon_restarted'
+           )",
+        params![now],
+    )?;
     connection.execute("DELETE FROM ritual_execution_locks", [])?;
     Ok(())
 }
@@ -1604,7 +1615,10 @@ const fn event_type_name(event_type: EventType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fubun_domain::{AdapterIdentity, SyntheticEventData, EVENT_SPEC_VERSION};
+    use fubun_domain::{
+        ActionSpec, AdapterIdentity, ExecutionMode, FailureMode, RitualExecutionConfig,
+        SyntheticEventData, EVENT_SPEC_VERSION, RITUAL_SCHEMA_VERSION,
+    };
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -1705,5 +1719,127 @@ mod tests {
             .expect("schema version");
         assert_eq!(version, 2);
         drop(storage);
+    }
+
+    #[tokio::test]
+    async fn restart_aborts_running_execution_steps_and_preserves_completed_steps() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        let storage = Storage::open(&path).expect("open storage");
+        let handle = storage.handle();
+        let now = OffsetDateTime::now_utc();
+        let ritual_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let definition = fubun_domain::RitualDefinition {
+            schema_version: RITUAL_SCHEMA_VERSION.to_owned(),
+            name: "restart".to_owned(),
+            actions: vec![ActionSpec::DesktopNotificationShow {
+                title: "title".to_owned(),
+                body: "body".to_owned(),
+            }],
+            execution: RitualExecutionConfig {
+                mode: ExecutionMode::Sequential,
+                on_failure: FailureMode::Stop,
+                timeout_seconds: 10,
+            },
+        };
+        let canonical = definition.canonical_json().expect("canonical");
+        let hash = definition.content_hash().expect("hash");
+        handle
+            .create_ritual(
+                Ritual {
+                    id: ritual_id,
+                    name: definition.name.clone(),
+                    status: RitualStatus::Active,
+                    current_version_id: version_id,
+                    created_at: now,
+                    updated_at: now,
+                },
+                RitualVersion {
+                    id: version_id,
+                    ritual_id,
+                    version: 1,
+                    schema_version: RITUAL_SCHEMA_VERSION.to_owned(),
+                    canonical_json: canonical,
+                    content_hash: hash,
+                    created_at: now,
+                },
+                definition,
+            )
+            .await
+            .expect("ritual");
+        let execution_id = Uuid::new_v4();
+        let steps = vec![
+            ExecutionStep {
+                id: Uuid::new_v4(),
+                execution_id,
+                step_index: 0,
+                action_type: "desktop.notification.show.v1".to_owned(),
+                status: ExecutionStepStatus::Pending,
+                adapter_id: None,
+                started_at: now,
+                finished_at: None,
+                result_code: None,
+                redacted_message: None,
+            },
+            ExecutionStep {
+                id: Uuid::new_v4(),
+                execution_id,
+                step_index: 1,
+                action_type: "desktop.notification.show.v1".to_owned(),
+                status: ExecutionStepStatus::Running,
+                adapter_id: Some("dev.fubun.linux".to_owned()),
+                started_at: now,
+                finished_at: None,
+                result_code: None,
+                redacted_message: None,
+            },
+            ExecutionStep {
+                id: Uuid::new_v4(),
+                execution_id,
+                step_index: 2,
+                action_type: "desktop.notification.show.v1".to_owned(),
+                status: ExecutionStepStatus::Succeeded,
+                adapter_id: Some("dev.fubun.linux".to_owned()),
+                started_at: now,
+                finished_at: Some(now),
+                result_code: Some("sent".to_owned()),
+                redacted_message: Some("notification sent".to_owned()),
+            },
+        ];
+        handle
+            .start_execution(
+                Execution {
+                    id: execution_id,
+                    ritual_id,
+                    ritual_version_id: version_id,
+                    status: ExecutionStatus::Running,
+                    trigger_kind: TriggerKind::Manual,
+                    started_at: now,
+                    finished_at: None,
+                    failure_code: None,
+                    created_at: now,
+                },
+                steps,
+            )
+            .await
+            .expect("execution");
+        handle
+            .abort_running_executions()
+            .await
+            .expect("abort on restart");
+        let (execution, steps) = handle.get_execution(execution_id).await.expect("history");
+        assert_eq!(execution.status, ExecutionStatus::Aborted);
+        assert_eq!(execution.failure_code.as_deref(), Some("daemon_restarted"));
+        assert_eq!(steps[0].status, ExecutionStepStatus::Aborted);
+        assert_eq!(steps[0].result_code.as_deref(), Some("daemon_restarted"));
+        assert_eq!(
+            steps[0].redacted_message.as_deref(),
+            Some("execution aborted because daemon restarted")
+        );
+        assert_eq!(steps[1].status, ExecutionStepStatus::Aborted);
+        assert_eq!(steps[1].result_code.as_deref(), Some("daemon_restarted"));
+        assert_eq!(steps[2].status, ExecutionStepStatus::Succeeded);
+        storage.shutdown().await.expect("shutdown");
     }
 }

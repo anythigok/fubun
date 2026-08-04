@@ -600,7 +600,19 @@
         "required_capability": {
           "type": "string"
         },
+        "required_tool_available": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "resource_exists": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "resource_kind_matches": {
           "type": [
             "boolean",
             "null"

@@ -5,7 +5,7 @@
 
 ## Decision
 
-AdapterはUnix Domain Socketで長時間接続し、Hello時にCapabilityを宣言する。CoreはAction Requestを送り、request IDとaction execution IDに対応するoneshotでResultを待つ。正常Response、Timeout、Disconnect、ShutdownでPendingを必ず解放する。
+AdapterはUnix Domain Socketで長時間接続し、Hello時に固定Action RegistryのCapabilityを重複なく宣言する。CoreはAction Requestを送り、request IDとaction execution IDに対応するoneshotでResultを待つ。Pendingは同期RAII Guardが所有し、正常Response、Future cancellation、Timeout、Disconnect、Shutdown、send failureの全経路で必ず解放する。Ritual全体は外側の強制dropに依存せず、deadlineの残り時間をAction dispatchへ渡す。
 
 ## Rationale
 

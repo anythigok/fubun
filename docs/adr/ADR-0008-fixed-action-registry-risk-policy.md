@@ -5,7 +5,7 @@
 
 ## Decision
 
-Actionはcompile-timeの固定Registryから取得し、Phase 2はR0/R1だけを許可する。Runtime plugin登録、任意Executable、R2/R3は作らない。
+Actionはcompile-timeの固定Registryから取得し、Phase 2はR0/R1だけを許可する。Adapter Helloも同じRegistryに照合し、未知・重複・過剰なCapabilityを受理しない。Runtime plugin登録、任意Executable、R2/R3は作らない。
 
 ## Rationale
 

@@ -71,11 +71,11 @@ Databaseは `$XDG_DATA_HOME/fubun/fubun.db`、未設定時は `$HOME/.local/shar
 
 ## Phase 2: ResourceとRitual
 
-まずDaemonとLinux Adapterを別Terminalで起動します。Adapterは固定Executableを使うため、実際のアプリやファイルを開きたくない検証では `--fake` を指定できます。
+まずDaemonとLinux Adapterを別Terminalで起動します。Production AdapterにはFake実行経路がなく、接続先の固定Executableと実環境の状態を使用します。実際のアプリやファイルを開かない検証は、Integration Test内のTest専用Fake Adapterを使ってください。
 
 ```bash
 cargo run -p fubund
-cargo run -p fubun-linux-adapter -- --fake
+cargo run -p fubun-linux-adapter
 ```
 
 Resourceは絶対Pathを登録し、登録時と実行直前にCanonical Pathを再確認します。

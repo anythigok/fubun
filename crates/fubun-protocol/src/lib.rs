@@ -328,8 +328,10 @@ pub struct PreviewAction {
     pub revertability: String,
     pub required_capability: String,
     pub adapter_connected: bool,
+    pub required_tool_available: Option<bool>,
     pub resource_exists: Option<bool>,
     pub resource_path_matches: Option<bool>,
+    pub resource_kind_matches: Option<bool>,
     pub desktop_entry_exists: Option<bool>,
     pub warning: Option<String>,
 }

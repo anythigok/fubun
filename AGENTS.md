@@ -14,3 +14,7 @@
 - Material変更後はApprovalを失効させる。
 - stdout・stderr全文を保存せず、CoreはOS Commandを直接実行しない。
 - Phase 2では自動Trigger・自動Executionを追加しない。
+- Production BinaryへFake Runner、`--fake`、実環境を偽装する成功経路を追加しない。Fake AdapterはTest Scopeだけに置く。
+- Adapter Helloは固定RegistryのCapability、重複なし、長さ・制御文字制約を満たす場合だけ受理する。
+- Pending ActionはCancellation、Timeout、Disconnect、Shutdownの全経路で解放する。
+- PreviewとRun直前のPreflightで必要ToolとResourceKindを再確認する。

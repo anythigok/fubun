@@ -234,18 +234,24 @@ impl ActionSpec {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ActionValidationError {
-    #[error("app_id must be 1-128 ASCII characters from A-Z, a-z, 0-9, '.', or '_'")]
+    #[error("app_id must be 1-128 bytes from A-Z, a-z, 0-9, '.', '_', or '-'")]
     InvalidAppId,
     #[error("notification {field} must be 1-{maximum} characters without control characters")]
     InvalidNotification { field: &'static str, maximum: usize },
 }
 
-fn validate_app_id(app_id: &str) -> Result<(), ActionValidationError> {
+/// Validate an XDG Desktop Entry ID used by the fixed Linux adapter.
+///
+/// The same validator is used by the domain and the adapter so that a value
+/// accepted during ritual validation cannot be rejected or reinterpreted at
+/// execution time.  Desktop Entry IDs are deliberately narrower than paths:
+/// only ASCII alphanumerics, `.`, `_`, and `-` are accepted.
+pub fn validate_app_id(app_id: &str) -> Result<(), ActionValidationError> {
     if app_id.is_empty()
         || app_id.len() > 128
-        || !app_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_')
+        || !app_id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_' || byte == b'-'
+        })
     {
         return Err(ActionValidationError::InvalidAppId);
     }
@@ -560,5 +566,24 @@ mod tests {
             first.content_hash().expect("hash"),
             second.content_hash().expect("hash")
         );
+    }
+
+    #[test]
+    fn desktop_entry_ids_share_the_strict_cross_crate_rules() {
+        for value in [
+            "code",
+            "google-chrome",
+            "org.example.App",
+            "org_example-App-1",
+        ] {
+            assert!(validate_app_id(value).is_ok(), "{value} should be valid");
+        }
+        for value in ["../app", "dir/app", r"dir\app", "app name", "", "app\nname"] {
+            assert!(
+                validate_app_id(value).is_err(),
+                "{value:?} should be invalid"
+            );
+        }
+        assert!(validate_app_id(&"a".repeat(129)).is_err());
     }
 }
