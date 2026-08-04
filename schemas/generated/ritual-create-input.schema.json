@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RitualDefinition",
+  "type": "object",
+  "required": [
+    "actions",
+    "execution",
+    "name",
+    "schema_version"
+  ],
+  "properties": {
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ActionSpec"
+      }
+    },
+    "execution": {
+      "$ref": "#/definitions/RitualExecutionConfig"
+    },
+    "name": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ActionSpec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "app_id",
+            "type"
+          ],
+          "properties": {
+            "app_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.app.ensure_running.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "linux.path.open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "body",
+            "title",
+            "type"
+          ],
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "desktop.notification.show.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ExecutionMode": {
+      "type": "string",
+      "enum": [
+        "sequential"
+      ]
+    },
+    "FailureMode": {
+      "type": "string",
+      "enum": [
+        "stop"
+      ]
+    },
+    "RitualExecutionConfig": {
+      "type": "object",
+      "required": [
+        "mode",
+        "on_failure",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/ExecutionMode"
+        },
+        "on_failure": {
+          "$ref": "#/definitions/FailureMode"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

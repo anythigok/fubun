@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ActionSpec",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "app_id",
+        "type"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "linux.app.ensure_running.v1"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "resource_id",
+        "type"
+      ],
+      "properties": {
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "linux.path.open.v1"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "title",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "desktop.notification.show.v1"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

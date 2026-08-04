@@ -2,7 +2,10 @@
 
 use std::io;
 
-use fubun_domain::Event;
+use fubun_domain::{
+    ActionSpec, Event, Execution, ExecutionStep, Resource, ResourceKind, Ritual, RitualDefinition,
+    RitualVersion, Sensitivity,
+};
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
@@ -44,6 +47,30 @@ pub struct EventIngestRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct AdapterStatusSnapshot {
+    pub tools: Vec<AdapterToolStatus>,
+    pub desktop_entry_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterToolStatus {
+    pub name: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterHello {
+    pub adapter_id: String,
+    pub adapter_version: String,
+    pub instance_id: Uuid,
+    pub action_capabilities: Vec<String>,
+    pub status: AdapterStatusSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EventsListRequest {
     #[serde(default, with = "time::serde::rfc3339::option")]
     #[schemars(with = "Option<String>")]
@@ -61,6 +88,124 @@ const fn default_event_limit() -> u32 {
 pub struct EmptyRequest {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceCreateRequest {
+    pub label: String,
+    pub path: String,
+    pub sensitivity: Sensitivity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceIdRequest {
+    pub resource_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RitualIdRequest {
+    pub ritual_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RitualCreateRequest {
+    pub definition: RitualDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RitualUpdateRequest {
+    pub ritual_id: Uuid,
+    pub definition: RitualDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RitualActivateRequest {
+    pub ritual_id: Uuid,
+    pub approve: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionIdRequest {
+    pub execution_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActionExecuteRequest {
+    pub action: ActionSpec,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_resource: Option<ResolvedResource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedResource {
+    pub resource_id: Uuid,
+    pub kind: ResourceKind,
+    pub canonical_locator: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterStatusRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "method", content = "params")]
+pub enum AdapterRequestBody {
+    #[serde(rename = "action.execute")]
+    ActionExecute(ActionExecuteRequest),
+    #[serde(rename = "adapter.status")]
+    Status(AdapterStatusRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterRequestEnvelope {
+    pub protocol_version: ProtocolVersion,
+    pub request_id: Uuid,
+    pub action_execution_id: Uuid,
+    pub body: AdapterRequestBody,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AdapterActionStatus {
+    Succeeded,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActionResult {
+    pub status: AdapterActionStatus,
+    pub result_code: String,
+    pub redacted_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "data")]
+pub enum AdapterResponseBody {
+    #[serde(rename = "action.result")]
+    ActionResult(ActionResult),
+    #[serde(rename = "adapter.status")]
+    Status(AdapterStatusSnapshot),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterResponseEnvelope {
+    pub protocol_version: ProtocolVersion,
+    pub request_id: Uuid,
+    pub action_execution_id: Uuid,
+    pub body: AdapterResponseBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "method", content = "params")]
 pub enum RequestBody {
     #[serde(rename = "client.hello")]
@@ -73,6 +218,38 @@ pub enum RequestBody {
     SystemStatus(EmptyRequest),
     #[serde(rename = "system.doctor")]
     SystemDoctor(EmptyRequest),
+    #[serde(rename = "adapter.hello")]
+    AdapterHello(AdapterHello),
+    #[serde(rename = "resource.create")]
+    ResourceCreate(ResourceCreateRequest),
+    #[serde(rename = "resource.list")]
+    ResourceList(EmptyRequest),
+    #[serde(rename = "resource.show")]
+    ResourceShow(ResourceIdRequest),
+    #[serde(rename = "ritual.create")]
+    RitualCreate(RitualCreateRequest),
+    #[serde(rename = "ritual.update")]
+    RitualUpdate(RitualUpdateRequest),
+    #[serde(rename = "ritual.list")]
+    RitualList(EmptyRequest),
+    #[serde(rename = "ritual.show")]
+    RitualShow(RitualIdRequest),
+    #[serde(rename = "ritual.preview")]
+    RitualPreview(RitualIdRequest),
+    #[serde(rename = "ritual.activate")]
+    RitualActivate(RitualActivateRequest),
+    #[serde(rename = "ritual.pause")]
+    RitualPause(RitualIdRequest),
+    #[serde(rename = "ritual.run")]
+    RitualRun(RitualIdRequest),
+    #[serde(rename = "adapter.list")]
+    AdapterList(EmptyRequest),
+    #[serde(rename = "adapter.status")]
+    AdapterStatus(EmptyRequest),
+    #[serde(rename = "execution.list")]
+    ExecutionList(EmptyRequest),
+    #[serde(rename = "execution.show")]
+    ExecutionShow(ExecutionIdRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -110,6 +287,95 @@ pub struct DoctorReport {
     pub database_path: String,
     pub database_status: String,
     pub schema_version: u32,
+    pub gtk_launch_available: bool,
+    pub xdg_open_available: bool,
+    pub notify_send_available: bool,
+    pub connected_adapters: usize,
+    pub action_registry_version: String,
+    pub ritual_schema_version: String,
+    pub running_executions: usize,
+    pub draft_rituals: usize,
+    pub active_rituals: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceList {
+    pub resources: Vec<Resource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RitualRecord {
+    pub ritual: Ritual,
+    pub version: RitualVersion,
+    pub definition: RitualDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RitualList {
+    pub rituals: Vec<Ritual>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewAction {
+    pub step_index: u32,
+    pub action_type: String,
+    pub risk_level: String,
+    pub idempotency: String,
+    pub revertability: String,
+    pub required_capability: String,
+    pub adapter_connected: bool,
+    pub required_tool_available: Option<bool>,
+    pub resource_exists: Option<bool>,
+    pub resource_path_matches: Option<bool>,
+    pub resource_kind_matches: Option<bool>,
+    pub desktop_entry_exists: Option<bool>,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RitualPreview {
+    pub ritual_id: Uuid,
+    pub ritual_version_id: Uuid,
+    pub actions: Vec<PreviewAction>,
+    pub timeout_seconds: u32,
+    pub warnings: Vec<String>,
+    pub executable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterReport {
+    pub adapter_id: String,
+    pub version: String,
+    pub instance_id: Uuid,
+    pub connected: bool,
+    pub capabilities: Vec<String>,
+    pub connected_at: String,
+    pub last_seen_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterList {
+    pub adapters: Vec<AdapterReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionRecord {
+    pub execution: Execution,
+    pub steps: Vec<ExecutionStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionList {
+    pub executions: Vec<Execution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -125,6 +391,38 @@ pub enum ResponsePayload {
     Status(StatusReport),
     #[serde(rename = "system.doctor")]
     Doctor(DoctorReport),
+    #[serde(rename = "adapter.hello_ack")]
+    AdapterHelloAck(ClientHelloAck),
+    #[serde(rename = "resource.created")]
+    ResourceCreated(Resource),
+    #[serde(rename = "resource.list")]
+    ResourceList(ResourceList),
+    #[serde(rename = "resource.show")]
+    ResourceShow(Resource),
+    #[serde(rename = "ritual.created")]
+    RitualCreated(RitualRecord),
+    #[serde(rename = "ritual.updated")]
+    RitualUpdated(RitualRecord),
+    #[serde(rename = "ritual.list")]
+    RitualList(RitualList),
+    #[serde(rename = "ritual.show")]
+    RitualShow(RitualRecord),
+    #[serde(rename = "ritual.preview")]
+    RitualPreview(RitualPreview),
+    #[serde(rename = "ritual.activated")]
+    RitualActivated(Ritual),
+    #[serde(rename = "ritual.paused")]
+    RitualPaused(Ritual),
+    #[serde(rename = "ritual.run")]
+    RitualRun(ExecutionRecord),
+    #[serde(rename = "adapter.list")]
+    AdapterList(AdapterList),
+    #[serde(rename = "adapter.status")]
+    AdapterStatus(AdapterList),
+    #[serde(rename = "execution.list")]
+    ExecutionList(ExecutionList),
+    #[serde(rename = "execution.show")]
+    ExecutionShow(ExecutionRecord),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -136,6 +434,7 @@ pub struct ErrorBody {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum ResponseBody {
     Ok(ResponsePayload),
     Error(ErrorBody),

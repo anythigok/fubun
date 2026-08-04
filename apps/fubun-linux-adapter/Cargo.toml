@@ -1,24 +1,22 @@
 [package]
-name = "fubun-core"
+name = "fubun-linux-adapter"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "fubun-linux-adapter"
+path = "src/main.rs"
+
 [dependencies]
 fubun-domain.workspace = true
-fubun-policy.workspace = true
 fubun-protocol.workspace = true
-fubun-storage.workspace = true
-thiserror.workspace = true
-time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
 
 [lints]
 workspace = true

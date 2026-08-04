@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Resource",
+  "type": "object",
+  "required": [
+    "canonical_locator",
+    "created_at",
+    "id",
+    "kind",
+    "label",
+    "locator",
+    "scope",
+    "sensitivity",
+    "updated_at"
+  ],
+  "properties": {
+    "canonical_locator": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "kind": {
+      "$ref": "#/definitions/ResourceKind"
+    },
+    "label": {
+      "type": "string"
+    },
+    "locator": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/definitions/ResourceScope"
+    },
+    "sensitivity": {
+      "$ref": "#/definitions/Sensitivity"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ResourceKind": {
+      "type": "string",
+      "enum": [
+        "filesystem.file",
+        "filesystem.directory"
+      ]
+    },
+    "ResourceScope": {
+      "type": "string",
+      "enum": [
+        "exact"
+      ]
+    },
+    "Sensitivity": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "sensitive"
+      ]
+    }
+  }
+}

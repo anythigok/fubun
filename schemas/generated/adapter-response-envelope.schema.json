@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AdapterResponseEnvelope",
+  "type": "object",
+  "required": [
+    "action_execution_id",
+    "body",
+    "protocol_version",
+    "request_id"
+  ],
+  "properties": {
+    "action_execution_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "body": {
+      "$ref": "#/definitions/AdapterResponseBody"
+    },
+    "protocol_version": {
+      "$ref": "#/definitions/ProtocolVersion"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ActionResult": {
+      "type": "object",
+      "required": [
+        "redacted_message",
+        "result_code",
+        "status"
+      ],
+      "properties": {
+        "redacted_message": {
+          "type": "string"
+        },
+        "result_code": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/AdapterActionStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdapterActionStatus": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "skipped",
+        "failed"
+      ]
+    },
+    "AdapterResponseBody": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ActionResult"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "action.result"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/AdapterStatusSnapshot"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "adapter.status"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "AdapterStatusSnapshot": {
+      "type": "object",
+      "required": [
+        "desktop_entry_ids",
+        "tools"
+      ],
+      "properties": {
+        "desktop_entry_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AdapterToolStatus"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdapterToolStatus": {
+      "type": "object",
+      "required": [
+        "available",
+        "name"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProtocolVersion": {
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

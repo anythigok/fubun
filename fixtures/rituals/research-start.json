@@ -1,0 +1,24 @@
+{
+  "schema_version": "dev.fubun.ritual/1",
+  "name": "Research Start",
+  "actions": [
+    {
+      "type": "linux.app.ensure_running.v1",
+      "app_id": "code"
+    },
+    {
+      "type": "linux.path.open.v1",
+      "resource_id": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "type": "desktop.notification.show.v1",
+      "title": "Fubun",
+      "body": "Ritual completed"
+    }
+  ],
+  "execution": {
+    "mode": "sequential",
+    "on_failure": "stop",
+    "timeout_seconds": 30
+  }
+}

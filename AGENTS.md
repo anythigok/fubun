@@ -8,3 +8,15 @@
 - 権限拡大にはADRを要求する。
 - FormattingとLintの最終判定はCIに任せる。
 - Security境界を壊す変更はP1として扱う。
+- Actionは固定Registryに登録された型だけを許可する。
+- Shell経由実行、任意Executable、R2以上のActionを追加しない。
+- Ritual JSONへ生Pathを置かず、Draft・Paused Ritualを実行しない。
+- Material変更後はApprovalを失効させる。
+- stdout・stderr全文を保存せず、CoreはOS Commandを直接実行しない。
+- Phase 2では自動Trigger・自動Executionを追加しない。
+- Production BinaryへFake Runner、`--fake`、実環境を偽装する成功経路を追加しない。Fake AdapterはTest Scopeだけに置く。
+- Adapter Helloは固定RegistryのCapability、重複なし、長さ・制御文字制約を満たす場合だけ受理する。
+- Pending ActionはCancellation、Timeout、Disconnect、Shutdownの全経路で解放する。
+- PreviewとRun直前のPreflightで必要ToolとResourceKindを再確認する。
+- Preview、Preflight、Dispatchは同一の単一Adapter Instance適格性判定を使い、Adapter状態を合成しない。
+- terminal Executionにpending/running Stepを残さず、選択済みAdapter Identityを成功・失敗の両方で履歴へ残す。
