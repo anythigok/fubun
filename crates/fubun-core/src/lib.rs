@@ -612,7 +612,7 @@ async fn process_request(
                 id,
                 payload.ritual_id,
                 SuggestionStatus::Dismissed,
-                None,
+                Some(OffsetDateTime::now_utc() + time::Duration::days(30)),
                 storage,
             )
             .await

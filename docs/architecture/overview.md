@@ -12,7 +12,7 @@ fubun-cli / fubun-linux-adapter / fubun-native-host / VS Code Extension
   -> SQLite (WAL, v5 migration)
 ```
 
-`fubun-domain` はEvent、Ritual、Resource、Observation Scope、Execution型、URL canonicalizationを所有します。`fubun-policy` は固定Action Registry、`fubun-protocol` はtransport framingと双方向envelope、`fubun-storage` はv4 migrationとsingle writer、`fubun-core` はScope検証、Preview・Approval・Execution orchestration、Core-built Eventを所有します。Linux固有Commandは `fubun-linux-adapter` だけが固定引数配列で呼び出します。BrowserのOS境界は `fubun-native-host`、Browser APIはManifest V3 Extension、VS Code APIはUI Extensionだけが担当します。CLIは全てdaemonを通り、databaseを直接読みません。
+`fubun-domain` はEvent、Ritual、Resource、Observation Scope、Execution型、URL canonicalizationを所有します。`fubun-policy` は固定Action Registry、`fubun-protocol` はtransport framingと双方向envelope、`fubun-storage` はv5 migrationとsingle writer、`fubun-core` はScope検証、Preview・Approval・Execution orchestration、Core-built Eventを所有します。Linux固有Commandは `fubun-linux-adapter` だけが固定引数配列で呼び出します。BrowserのOS境界は `fubun-native-host`、Browser APIはManifest V3 Extension、VS Code APIはUI Extensionだけが担当します。CLIは全てdaemonを通り、databaseを直接読みません。
 
 受信Eventの `received_at` はdaemonがUTC現在時刻で上書きします。重複判定はEvent IDではなく `(adapter_instance_id, sequence_no)` が正本です。
 
@@ -34,7 +34,7 @@ Browser ResourceだけをCandidateへ使い、2〜5件、support 3以上、7000 
 18時間span以上の条件をすべて満たした最長PrefixをWorkspaceごとに一つ選びます。
 
 Discovery Run、Session、Session Event、Suggestion Evidence、Ordered Actions、Supporting
-Sessionsはv5 Migrationで保存されます。Suggestion Acceptは一つのStorage transactionで
+Sessionsはv5 Migrationで保存されます。新規SuggestionはRolling 24時間で最大1件、未終端候補は最大5件です。Suggestion Acceptは一つのStorage transactionで
 Resource／Scopeを再検証し、未承認・DraftのBrowser Ritualだけを生成します。Scheduler、AI、
 Generic Pattern Miner、Automatic Ruleはこの層に存在しません。
 

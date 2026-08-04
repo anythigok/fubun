@@ -1398,12 +1398,33 @@ fn execute_operation(
                 }
             }
             let now = OffsetDateTime::now_utc();
+            let now_timestamp = format_ts(now)?;
+            transaction.execute(
+                "UPDATE suggestions SET status='pending', snoozed_until=NULL
+                 WHERE status IN ('snoozed','dismissed') AND snoozed_until IS NOT NULL AND snoozed_until <= ?1",
+                params![now_timestamp],
+            )?;
+            let recent_cutoff = format_ts(now - time::Duration::hours(24))?;
+            let mut pending_like_count: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM suggestions WHERE status IN ('pending','snoozed','dismissed')",
+                [],
+                |row| row.get(0),
+            )?;
+            let mut has_recent_new_suggestion: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM suggestions WHERE created_at >= ?1)",
+                params![recent_cutoff],
+                |row| row.get(0),
+            )?;
+            let mut suggestions_created = 0usize;
             for suggestion in &suggestions {
                 let existing: Option<(String, String, Option<String>, Option<String>)> = transaction.query_row(
                     "SELECT id, status, snoozed_until, accepted_ritual_id FROM suggestions WHERE pattern_fingerprint = ?1",
                     params![suggestion.pattern_fingerprint],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 ).optional()?;
+                if existing.is_none() && (has_recent_new_suggestion || pending_like_count >= 5) {
+                    continue;
+                }
                 let status = existing
                     .as_ref()
                     .map(|(_, status, _, _)| status.as_str())
@@ -1419,6 +1440,11 @@ fn execute_operation(
                         median_completion_ms=excluded.median_completion_ms, updated_at=excluded.updated_at",
                     params![suggestion.id.to_string(), suggestion.algorithm_version, suggestion.workspace_resource_id.to_string(), suggestion.pattern_fingerprint, suggestion.support_sessions, suggestion.eligible_sessions, suggestion.confidence_basis_points, format_ts(suggestion.first_seen_at)?, format_ts(suggestion.last_seen_at)?, suggestion.observation_span_seconds, suggestion.median_completion_ms, format_ts(now)?, status],
                 )?;
+                if existing.is_none() {
+                    suggestions_created += 1;
+                    pending_like_count += 1;
+                    has_recent_new_suggestion = true;
+                }
                 transaction.execute(
                     "DELETE FROM suggestion_actions WHERE suggestion_id = ?1",
                     params![suggestion.id.to_string()],
@@ -1439,14 +1465,14 @@ fn execute_operation(
                 "UPDATE discovery_runs SET status='succeeded', finished_at=?1, input_event_count=?2,
                     sessions_upserted=?3, candidates_evaluated=?4, suggestions_created=?5
                  WHERE id=?6",
-                params![format_ts(finished)?, run.input_event_count, sessions.len(), run.candidates_evaluated, suggestions.len(), run.id.to_string()],
+                params![format_ts(finished)?, run.input_event_count, sessions.len(), run.candidates_evaluated, suggestions_created, run.id.to_string()],
             )?;
             transaction.commit()?;
             let mut completed = run;
             completed.status = DiscoveryRunStatus::Succeeded;
             completed.finished_at = Some(finished);
             completed.sessions_upserted = sessions.len() as u32;
-            completed.suggestions_created = suggestions.len() as u32;
+            completed.suggestions_created = suggestions_created as u32;
             Ok(StorageResponse::DiscoveryRun(completed))
         }
         Operation::ListDiscoveryRuns => Ok(StorageResponse::DiscoveryRuns(list_discovery_runs(

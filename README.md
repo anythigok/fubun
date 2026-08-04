@@ -32,7 +32,8 @@ Phase 4Aは、明示的に観察中のVS Code WorkspaceをAnchorに、開始か�
 開かれたBrowser Resourceの安定したPrefixだけを決定論的に候補化します。対象は
 `workspace-browser-start/v1`一種類で、Generic n-gram、AI、Scheduler、Rule、自動実行は
 ありません。Raw URL、Workspace Path、本文、Title、Query、FragmentはSession／Evidenceへ
-保存せず、Resource IDとラベルだけで説明します。
+保存せず、Resource IDとラベルだけで説明します。新規SuggestionはRolling 24時間で最大1件、
+未終端の候補は最大5件、Dismissは30日間抑止します。
 
 ```text
 fubun discovery run

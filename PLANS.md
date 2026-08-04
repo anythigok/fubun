@@ -39,8 +39,9 @@
 - [x] Phase 4AのSecurity境界と非目標を文書化
 
 合理的仮定: Lookbackは30日、Input上限は100,000件、DiscoveryはCLI／IPC要求時だけ
-実行し、期限切れの抑止状態はListまたはRunで再調整する。Scheduler、AI、汎用系列
-マイニングは追加しない。
+実行し、期限切れの抑止状態はListまたはRunで再調整する。新規SuggestionはRolling 24時間で
+最大1件、未終端（pending/snoozed/dismissed）の候補は最大5件、Dismissは30日抑止とする。
+Scheduler、AI、汎用系列マイニングは追加しない。
 
 ## Phase 2: explicit ritual manual execution
 
