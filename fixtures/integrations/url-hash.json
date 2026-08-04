@@ -1,0 +1,5 @@
+{
+  "input": "https://Example.COM:443/research?id=123#section",
+  "canonical": "https://example.com/research",
+  "sha256": "468164e75ba0e4cf47eee057fe3459fa5bc5fd4ba259de08f117c780e261da59"
+}

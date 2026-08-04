@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Fubun</title></head>
+  <body>
+    <main>
+      <h1>Fubun</h1>
+      <p id="status">Checking integration…</p>
+      <p id="connection">Native Host/Core: checking…</p>
+      <p id="page">Current page: checking…</p>
+      <p id="registration">Observation: checking…</p>
+      <p id="permission">Origin permission: checking…</p>
+      <button id="observe" type="button">Observe this page</button>
+      <button id="stop" type="button">Stop observing this page</button>
+      <p>Only an explicitly permitted origin is observed. Page content, title, cookies, query strings, and fragments are never stored.</p>
+      <script type="module" src="popup.js"></script>
+    </main>
+  </body>
+</html>

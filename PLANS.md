@@ -80,3 +80,39 @@ Head `776d4c82aad646665d40d7a49cf26ab6426b9d63` を確認した時点で、Previ
 
 - Pattern Miner、Suggestion、Rule、自動Trigger、自動Execution、GUI、Browser/VS Code連携はPhase 3以降。
 - Windows/macOS、packaging、auto-update、cloud sync、plugin API、AIはbacklog only。
+
+## Phase 3: explicit browser and VS Code integrations
+
+- [x] Phase 2 PR #1をReady化し、Green CIを確認してmainへSquash Merge
+- [x] `codex/integrations-v1`を統合後mainから作成
+- [x] `ResourceKind::WebPage`、http/https canonicalization、query/fragment除去、SHA-256 hash
+- [x] v4 migrationと`observation_scopes`（browser.chromium / vscode.workspace、active/paused）
+- [x] Browser/VS Code Observation Enable、Pause、ListをCore IPCとCLIへ追加
+- [x] Adapter HelloのEvent CapabilityとEvent-only Adapterを追加
+- [x] Core-built semantic Event（Browser Resource Opened / VS Code Workspace Opened）とEvent Ack
+- [x] Browser `browser.tab.ensure_open.v1` Action、Permission付き同一Adapter選択、Execution History
+- [x] `fubun-native-host`（Chrome Native Messaging framing、Origin/Extension ID検証、stdout専用Protocol）
+- [x] Manifest V3 Browser Extension（optional host permission、Storage hash/ID、navigation semantic event）
+- [x] VS Code UI Extension（Local single-folder workspace、globalState hash/ID、Event-only Adapter）
+- [x] Native Host install/status/uninstall、Integration status、README/ADR/Threat Model/CI更新
+- [x] Rust/TypeScript unit・integration・schema drift・artifact build検証
+
+### Phase 3 design decisions and assumptions
+
+- BrowserとVS CodeのResource locatorはCoreでcanonicalizeする。URLのquery/fragment、Workspaceのraw pathはEvent、ログ、Extension Storageへ保存しない。
+- Browser ExtensionはPopupのユーザーGesture中だけOrigin permissionを要求し、成功後にScopeを登録する。Permission/Scope変更時は新しいAdapter Instanceを再登録し、許可Resource snapshotを別Instanceと合成しない。
+- Native HostはChromeのcaller originと設定ファイルの許可Extension IDを二重検証し、Native Messagingの32-bit native-endian framingとCoreの4-byte little-endian framingを変換する。
+- VS Codeは本文やファイル名を読まず、Local/file/single-folderのcanonical hashとResource IDだけを保持する。Remote/Multi-root/Virtual/Untitledは対象外。
+- Browser ActionはR1のResource ID-only Actionとし、Undoや自動Triggerは主張しない。
+- `observation_scopes`は(source, resource_id)を一意にし、Enableは既存Scopeをactiveへ戻し、Pauseはactive Scopeだけをpausedへ遷移させる。
+
+### Phase 3 verification notes
+
+- 旧Phase 1 synthetic Eventのdataはtagなしだったため、v4 migrationで既存`data_json`/`canonical_json`へ`kind: synthetic`を補い、履歴を失わずstrict EventDataへ移行する回帰Testを追加した。
+- Browser Observation Enable後はNative Portを再接続し、Coreが新しい`permitted_resource_ids`を持つ同一Adapter InstanceだけをEvent/Actionの適格候補にする。
+- Browser/VS Codeの実Chrome/VS Code Profileは変更せず、Rust integration test、Fake API、Temporary XDG/HOME、生成artifactで検証する。
+
+### Phase 3 deferred
+
+- Phase 4のSessionizer、Pattern Miner、Suggestion、Evidence、Dismissal/Snooze、SuggestionからのRitual Draft生成。
+- Firefox、Marketplace公開、Chrome実体のCI起動、Cross-platform Adapter、GUI、Performance tuning、複数Extension IDを跨ぐ高度なManifest管理。

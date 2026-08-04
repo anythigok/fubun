@@ -111,8 +111,49 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "browser.tab.ensure_open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
         }
       ]
+    },
+    "AdapterEventAck": {
+      "type": "object",
+      "required": [
+        "duplicate",
+        "event_id",
+        "stored"
+      ],
+      "properties": {
+        "duplicate": {
+          "type": "boolean"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "stored": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "AdapterRequestBody": {
       "oneOf": [
@@ -149,6 +190,24 @@
             },
             "params": {
               "$ref": "#/definitions/AdapterStatusRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "event.ack"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/AdapterEventAck"
             }
           }
         }
@@ -203,7 +262,8 @@
       "type": "string",
       "enum": [
         "filesystem.file",
-        "filesystem.directory"
+        "filesystem.directory",
+        "web.page"
       ]
     }
   }

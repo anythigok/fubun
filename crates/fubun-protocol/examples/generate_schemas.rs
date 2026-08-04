@@ -1,7 +1,8 @@
 use std::{fs, path::PathBuf};
 
 use fubun_domain::{
-    ActionSpec, Event, Execution, ExecutionStep, Resource, Ritual, RitualDefinition, RitualVersion,
+    ActionSpec, Event, Execution, ExecutionStep, ObservationScope, Resource, Ritual,
+    RitualDefinition, RitualVersion,
 };
 use fubun_protocol::{
     AdapterRequestEnvelope, AdapterResponseEnvelope, RequestEnvelope, ResponseEnvelope,
@@ -23,6 +24,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &schema_for!(RitualDefinition),
     )?;
     write_schema(output.join("resource.schema.json"), &schema_for!(Resource))?;
+    write_schema(
+        output.join("observation-scope.schema.json"),
+        &schema_for!(ObservationScope),
+    )?;
     write_schema(
         output.join("action-spec.schema.json"),
         &schema_for!(ActionSpec),

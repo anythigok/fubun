@@ -34,8 +34,9 @@ pub enum AdapterDispatchErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterRequirements {
     pub capability: &'static str,
-    pub required_tool: &'static str,
+    pub required_tool: Option<&'static str>,
     pub desktop_entry_id: Option<String>,
+    pub browser_resource_id: Option<Uuid>,
 }
 
 impl AdapterRequirements {
@@ -44,18 +45,27 @@ impl AdapterRequirements {
         match action {
             ActionSpec::LinuxAppEnsureRunning { app_id } => Self {
                 capability: "linux.app.ensure_running.v1",
-                required_tool: "gtk-launch",
+                required_tool: Some("gtk-launch"),
                 desktop_entry_id: Some(app_id.clone()),
+                browser_resource_id: None,
             },
             ActionSpec::LinuxPathOpen { .. } => Self {
                 capability: "linux.path.open.v1",
-                required_tool: "xdg-open",
+                required_tool: Some("xdg-open"),
                 desktop_entry_id: None,
+                browser_resource_id: None,
             },
             ActionSpec::DesktopNotificationShow { .. } => Self {
                 capability: "desktop.notification.show.v1",
-                required_tool: "notify-send",
+                required_tool: Some("notify-send"),
                 desktop_entry_id: None,
+                browser_resource_id: None,
+            },
+            ActionSpec::BrowserTabEnsureOpen { resource_id } => Self {
+                capability: "browser.tab.ensure_open.v1",
+                required_tool: None,
+                desktop_entry_id: None,
+                browser_resource_id: Some(*resource_id),
             },
         }
     }
@@ -106,9 +116,15 @@ pub enum AdapterRegistrationError {
 }
 
 const LINUX_ADAPTER_ID: &str = "dev.fubun.linux";
+const BROWSER_ADAPTER_ID: &str = "dev.fubun.browser.chromium";
+const VSCODE_ADAPTER_ID: &str = "dev.fubun.vscode";
 const MAX_ADAPTER_VERSION_BYTES: usize = 128;
 const MAX_CAPABILITIES: usize = 16;
 const MAX_CAPABILITY_BYTES: usize = 128;
+const EVENT_CAPABILITIES: [&str; 2] = [
+    "dev.fubun.browser.resource.opened.v1",
+    "dev.fubun.vscode.workspace.opened.v1",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchedActionResult {
@@ -137,7 +153,10 @@ pub struct AdapterManager {
 
 impl AdapterManager {
     pub fn validate_hello(hello: &AdapterHello) -> Result<(), AdapterRegistrationError> {
-        if hello.adapter_id != LINUX_ADAPTER_ID {
+        if !matches!(
+            hello.adapter_id.as_str(),
+            LINUX_ADAPTER_ID | BROWSER_ADAPTER_ID | VSCODE_ADAPTER_ID
+        ) {
             return Err(AdapterRegistrationError::UnknownAdapter);
         }
         if hello.adapter_version.is_empty()
@@ -149,13 +168,17 @@ impl AdapterManager {
         {
             return Err(AdapterRegistrationError::InvalidVersion);
         }
-        if hello.action_capabilities.is_empty()
-            || hello.action_capabilities.len() > MAX_CAPABILITIES
+        if hello.action_capabilities.len() + hello.event_capabilities.len() > MAX_CAPABILITIES
+            || (hello.action_capabilities.is_empty() && hello.event_capabilities.is_empty())
         {
             return Err(AdapterRegistrationError::InvalidCapabilityCount);
         }
         let mut seen = HashSet::new();
-        for capability in &hello.action_capabilities {
+        for capability in hello
+            .action_capabilities
+            .iter()
+            .chain(hello.event_capabilities.iter())
+        {
             if capability.is_empty()
                 || capability.len() > MAX_CAPABILITY_BYTES
                 || capability
@@ -164,7 +187,39 @@ impl AdapterManager {
             {
                 return Err(AdapterRegistrationError::InvalidCapability);
             }
-            if descriptor_by_type(capability).is_none() {
+            if descriptor_by_type(capability).is_none()
+                && !EVENT_CAPABILITIES.contains(&capability.as_str())
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if hello.adapter_id == VSCODE_ADAPTER_ID && descriptor_by_type(capability).is_some() {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if hello.adapter_id == BROWSER_ADAPTER_ID && capability.starts_with("dev.fubun.vscode.")
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if capability == "browser.tab.ensure_open.v1" && hello.adapter_id != BROWSER_ADAPTER_ID
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if matches!(
+                capability.as_str(),
+                "linux.app.ensure_running.v1"
+                    | "linux.path.open.v1"
+                    | "desktop.notification.show.v1"
+            ) && hello.adapter_id != LINUX_ADAPTER_ID
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if capability == "dev.fubun.browser.resource.opened.v1"
+                && hello.adapter_id != BROWSER_ADAPTER_ID
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if capability == "dev.fubun.vscode.workspace.opened.v1"
+                && hello.adapter_id != VSCODE_ADAPTER_ID
+            {
                 return Err(AdapterRegistrationError::UnknownCapability);
             }
             if !seen.insert(capability) {
@@ -334,7 +389,9 @@ impl AdapterManager {
         } else {
             match response.body {
                 AdapterResponseBody::ActionResult(result) => Ok(result),
-                AdapterResponseBody::Status(_) => Err(AdapterDispatchErrorKind::Protocol),
+                AdapterResponseBody::Status(_) | AdapterResponseBody::EventEmit(_) => {
+                    Err(AdapterDispatchErrorKind::Protocol)
+                }
             }
         };
         let _ = pending.sender.send(result);
@@ -364,6 +421,8 @@ impl AdapterManager {
                 instance_id: connection.hello.instance_id,
                 connected: true,
                 capabilities: connection.hello.action_capabilities.clone(),
+                event_capabilities: connection.hello.event_capabilities.clone(),
+                permitted_resource_ids: connection.hello.status.permitted_resource_ids.clone(),
                 connected_at: connection
                     .connected_at
                     .format(&time::format_description::well_known::Rfc3339)
@@ -380,6 +439,15 @@ impl AdapterManager {
 
     pub async fn connected_count(&self) -> usize {
         self.connections.lock().await.len()
+    }
+
+    pub async fn connected_count_by_id(&self, adapter_id: &str) -> usize {
+        self.connections
+            .lock()
+            .await
+            .values()
+            .filter(|connection| connection.hello.adapter_id == adapter_id)
+            .count()
     }
 
     pub async fn tool_available(&self, tool: &str) -> bool {
@@ -432,18 +500,20 @@ fn connection_satisfies(
     connection: &AdapterConnection,
     requirements: &AdapterRequirements,
 ) -> bool {
-    connection.hello.adapter_id == LINUX_ADAPTER_ID
+    adapter_id_allowed_for_capability(&connection.hello.adapter_id, requirements.capability)
         && connection
             .hello
             .action_capabilities
             .iter()
             .any(|candidate| candidate == requirements.capability)
-        && connection
-            .hello
-            .status
-            .tools
-            .iter()
-            .any(|candidate| candidate.name == requirements.required_tool && candidate.available)
+        && requirements.required_tool.is_none_or(|tool| {
+            connection
+                .hello
+                .status
+                .tools
+                .iter()
+                .any(|candidate| candidate.name == tool && candidate.available)
+        })
         && requirements
             .desktop_entry_id
             .as_ref()
@@ -455,6 +525,24 @@ fn connection_satisfies(
                     .iter()
                     .any(|candidate| candidate == entry_id)
             })
+        && requirements.browser_resource_id.is_none_or(|resource_id| {
+            connection.hello.adapter_id == BROWSER_ADAPTER_ID
+                && connection
+                    .hello
+                    .status
+                    .permitted_resource_ids
+                    .contains(&resource_id)
+        })
+}
+
+fn adapter_id_allowed_for_capability(adapter_id: &str, capability: &str) -> bool {
+    match capability {
+        "browser.tab.ensure_open.v1" => adapter_id == BROWSER_ADAPTER_ID,
+        "linux.app.ensure_running.v1" | "linux.path.open.v1" | "desktop.notification.show.v1" => {
+            adapter_id == LINUX_ADAPTER_ID
+        }
+        _ => false,
+    }
 }
 
 struct PendingRequestGuard {
@@ -515,6 +603,7 @@ mod tests {
             adapter_version: "test".to_owned(),
             instance_id,
             action_capabilities: capabilities.into_iter().map(str::to_owned).collect(),
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: tools
                     .into_iter()
@@ -524,6 +613,7 @@ mod tests {
                     })
                     .collect(),
                 desktop_entry_ids: desktop_entry_ids.into_iter().map(str::to_owned).collect(),
+                permitted_resource_ids: Vec::new(),
             },
         }
     }

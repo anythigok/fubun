@@ -1,0 +1,21 @@
+{
+  "name": "@fubun/browser-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "build": "node build.mjs",
+    "package": "pnpm build && node package.mjs"
+  },
+  "dependencies": {
+    "@fubun/protocol-ts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.302",
+    "esbuild": "0.25.0",
+    "typescript": "5.7.3"
+  }
+}

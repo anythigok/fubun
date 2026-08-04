@@ -2,6 +2,7 @@
 members = [
     "apps/fubun-cli",
     "apps/fubun-linux-adapter",
+    "apps/fubun-native-host",
     "apps/fubund",
     "crates/fubun-core",
     "crates/fubun-domain",
@@ -38,6 +39,7 @@ time = { version = "=0.3.41", features = ["formatting", "parsing", "serde"] }
 tokio = { version = "=1.45.1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "=0.1.41"
 tracing-subscriber = { version = "=0.3.19", features = ["fmt"] }
+url = "=2.5.2"
 uuid = { version = "=1.16.0", features = ["serde", "v4"] }
 
 [workspace.lints.rust]

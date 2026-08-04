@@ -84,6 +84,26 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "browser.tab.ensure_open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -117,6 +137,13 @@
         },
         "adapter_version": {
           "type": "string"
+        },
+        "event_capabilities": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "instance_id": {
           "type": "string",
@@ -168,6 +195,14 @@
             "type": "string"
           }
         },
+        "permitted_resource_ids": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
         "tools": {
           "type": "array",
           "items": {
@@ -188,6 +223,22 @@
           "type": "boolean"
         },
         "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrowserObservationEnableRequest": {
+      "type": "object",
+      "required": [
+        "label",
+        "url"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "url": {
           "type": "string"
         }
       },
@@ -267,7 +318,7 @@
           ]
         },
         "data": {
-          "$ref": "#/definitions/SyntheticEventData"
+          "$ref": "#/definitions/EventData"
         },
         "id": {
           "type": "string",
@@ -294,6 +345,72 @@
       },
       "additionalProperties": false
     },
+    "EventData": {
+      "description": "Event payloads are intentionally small and semantic.  Raw URLs, paths, titles, tab identifiers, and file names are not representable here.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "counter",
+            "kind",
+            "label"
+          ],
+          "properties": {
+            "counter": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "synthetic"
+              ]
+            },
+            "label": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "resource_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "browser.resource.opened"
+              ]
+            },
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "resource_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vscode.workspace.opened"
+              ]
+            },
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      ]
+    },
     "EventIngestRequest": {
       "type": "object",
       "required": [
@@ -309,7 +426,9 @@
     "EventType": {
       "type": "string",
       "enum": [
-        "dev.fubun.dev.synthetic.v1"
+        "dev.fubun.dev.synthetic.v1",
+        "dev.fubun.browser.resource.opened.v1",
+        "dev.fubun.vscode.workspace.opened.v1"
       ]
     },
     "EventsListRequest": {
@@ -354,6 +473,43 @@
       "type": "string",
       "enum": [
         "stop"
+      ]
+    },
+    "ObservationListRequest": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ObservationSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationPauseRequest": {
+      "type": "object",
+      "required": [
+        "scope_id"
+      ],
+      "properties": {
+        "scope_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationSource": {
+      "type": "string",
+      "enum": [
+        "browser.chromium",
+        "vscode.workspace"
       ]
     },
     "PrivacyClass": {
@@ -418,6 +574,78 @@
             },
             "params": {
               "$ref": "#/definitions/EventIngestRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "browser.observation.enable"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/BrowserObservationEnableRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "vscode.observation.enable"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/VscodeObservationEnableRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "observation.pause"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/ObservationPauseRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "observations.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/ObservationListRequest"
             }
           }
         },
@@ -762,6 +990,24 @@
               "$ref": "#/definitions/ExecutionIdRequest"
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "integrations.status"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
         }
       ]
     },
@@ -913,16 +1159,15 @@
         "sensitive"
       ]
     },
-    "SyntheticEventData": {
+    "VscodeObservationEnableRequest": {
       "type": "object",
       "required": [
-        "counter",
+        "absolute_path",
         "label"
       ],
       "properties": {
-        "counter": {
-          "type": "integer",
-          "format": "int64"
+        "absolute_path": {
+          "type": "string"
         },
         "label": {
           "type": "string"

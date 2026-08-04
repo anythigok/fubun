@@ -71,6 +71,7 @@ async fn fake_adapter(
                 "linux.path.open.v1".to_owned(),
                 "desktop.notification.show.v1".to_owned(),
             ],
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: vec![
                     AdapterToolStatus {
@@ -87,6 +88,7 @@ async fn fake_adapter(
                     },
                 ],
                 desktop_entry_ids: vec!["code".to_owned()],
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };
@@ -145,12 +147,14 @@ async fn disconnecting_adapter(paths: &FubunPaths) -> TestAdapter {
             adapter_version: "disconnect-test".to_owned(),
             instance_id,
             action_capabilities: vec!["desktop.notification.show.v1".to_owned()],
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: vec![AdapterToolStatus {
                     name: "notify-send".to_owned(),
                     available: true,
                 }],
                 desktop_entry_ids: vec![],
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };
@@ -189,6 +193,8 @@ async fn limited_adapter(
             adapter_version: "limited-test".to_owned(),
             instance_id,
             action_capabilities: capabilities.into_iter().map(str::to_owned).collect(),
+            event_capabilities: Vec::new(),
+
             status: AdapterStatusSnapshot {
                 tools: ["gtk-launch", "xdg-open", "notify-send"]
                     .into_iter()
@@ -198,6 +204,7 @@ async fn limited_adapter(
                     })
                     .collect(),
                 desktop_entry_ids: vec!["code".to_owned()],
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };
@@ -257,6 +264,8 @@ async fn status_adapter(
             adapter_version: adapter_version.to_owned(),
             instance_id,
             action_capabilities: capabilities.into_iter().map(str::to_owned).collect(),
+            event_capabilities: Vec::new(),
+
             status: AdapterStatusSnapshot {
                 tools: tools
                     .into_iter()
@@ -266,6 +275,7 @@ async fn status_adapter(
                     })
                     .collect(),
                 desktop_entry_ids: desktop_entry_ids.into_iter().map(str::to_owned).collect(),
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };
@@ -319,12 +329,14 @@ async fn protocol_error_adapter(paths: &FubunPaths) -> TestAdapter {
             adapter_version: "protocol-error-test".to_owned(),
             instance_id,
             action_capabilities: vec!["desktop.notification.show.v1".to_owned()],
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: vec![AdapterToolStatus {
                     name: "notify-send".to_owned(),
                     available: true,
                 }],
                 desktop_entry_ids: Vec::new(),
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };
@@ -375,12 +387,14 @@ async fn silent_adapter(paths: &FubunPaths) -> TestAdapter {
             adapter_version: "silent-test".to_owned(),
             instance_id,
             action_capabilities: vec!["desktop.notification.show.v1".to_owned()],
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: vec![AdapterToolStatus {
                     name: "notify-send".to_owned(),
                     available: true,
                 }],
                 desktop_entry_ids: Vec::new(),
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };
@@ -789,12 +803,14 @@ async fn adapter_timeout_releases_request() {
             adapter_version: "test".to_owned(),
             instance_id: adapter_instance_id,
             action_capabilities: vec!["desktop.notification.show.v1".to_owned()],
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: vec![AdapterToolStatus {
                     name: "notify-send".to_owned(),
                     available: true,
                 }],
                 desktop_entry_ids: vec![],
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };
@@ -972,12 +988,14 @@ async fn adapter_disconnect_fails_without_permanent_wait() {
             adapter_version: "test".to_owned(),
             instance_id: Uuid::new_v4(),
             action_capabilities: vec!["desktop.notification.show.v1".to_owned()],
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: vec![AdapterToolStatus {
                     name: "notify-send".to_owned(),
                     available: true,
                 }],
                 desktop_entry_ids: vec![],
+                permitted_resource_ids: Vec::new(),
             },
         }),
     };

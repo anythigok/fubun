@@ -3,8 +3,8 @@
 use std::io;
 
 use fubun_domain::{
-    ActionSpec, Event, Execution, ExecutionStep, Resource, ResourceKind, Ritual, RitualDefinition,
-    RitualVersion, Sensitivity,
+    ActionSpec, Event, EventType, Execution, ExecutionStep, ObservationScope, ObservationSource,
+    Resource, ResourceKind, Ritual, RitualDefinition, RitualVersion, Sensitivity,
 };
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -47,9 +47,23 @@ pub struct EventIngestRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct AdapterEventEmitRequest {
+    pub sequence_no: u64,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub occurred_at: OffsetDateTime,
+    #[serde(rename = "type")]
+    pub event_type: EventType,
+    pub resource_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AdapterStatusSnapshot {
     pub tools: Vec<AdapterToolStatus>,
     pub desktop_entry_ids: Vec<String>,
+    #[serde(default)]
+    pub permitted_resource_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -66,6 +80,8 @@ pub struct AdapterHello {
     pub adapter_version: String,
     pub instance_id: Uuid,
     pub action_capabilities: Vec<String>,
+    #[serde(default)]
+    pub event_capabilities: Vec<String>,
     pub status: AdapterStatusSnapshot,
 }
 
@@ -93,6 +109,64 @@ pub struct ResourceCreateRequest {
     pub label: String,
     pub path: String,
     pub sensitivity: Sensitivity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserObservationEnableRequest {
+    pub label: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VscodeObservationEnableRequest {
+    pub label: String,
+    pub absolute_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationPauseRequest {
+    pub scope_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationListRequest {
+    #[serde(default)]
+    pub source: Option<ObservationSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserObservationEnabled {
+    pub resource: Resource,
+    pub scope: ObservationScope,
+    pub canonical_url_hash: String,
+    pub origin_pattern: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VscodeObservationEnabled {
+    pub resource: Resource,
+    pub scope: ObservationScope,
+    pub canonical_path_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationList {
+    pub scopes: Vec<ObservationScope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventAck {
+    pub event_id: Uuid,
+    pub stored: bool,
+    pub duplicate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -154,12 +228,22 @@ pub struct ResolvedResource {
 pub struct AdapterStatusRequest {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterEventAck {
+    pub event_id: Uuid,
+    pub stored: bool,
+    pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "method", content = "params")]
 pub enum AdapterRequestBody {
     #[serde(rename = "action.execute")]
     ActionExecute(ActionExecuteRequest),
     #[serde(rename = "adapter.status")]
     Status(AdapterStatusRequest),
+    #[serde(rename = "event.ack")]
+    EventAck(AdapterEventAck),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -194,6 +278,8 @@ pub enum AdapterResponseBody {
     ActionResult(ActionResult),
     #[serde(rename = "adapter.status")]
     Status(AdapterStatusSnapshot),
+    #[serde(rename = "event.emit")]
+    EventEmit(AdapterEventEmitRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -212,6 +298,14 @@ pub enum RequestBody {
     ClientHello(ClientHello),
     #[serde(rename = "event.ingest")]
     EventIngest(EventIngestRequest),
+    #[serde(rename = "browser.observation.enable")]
+    BrowserObservationEnable(BrowserObservationEnableRequest),
+    #[serde(rename = "vscode.observation.enable")]
+    VscodeObservationEnable(VscodeObservationEnableRequest),
+    #[serde(rename = "observation.pause")]
+    ObservationPause(ObservationPauseRequest),
+    #[serde(rename = "observations.list")]
+    ObservationsList(ObservationListRequest),
     #[serde(rename = "events.list")]
     EventsList(EventsListRequest),
     #[serde(rename = "system.status")]
@@ -250,6 +344,8 @@ pub enum RequestBody {
     ExecutionList(EmptyRequest),
     #[serde(rename = "execution.show")]
     ExecutionShow(ExecutionIdRequest),
+    #[serde(rename = "integrations.status")]
+    IntegrationsStatus(EmptyRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -264,6 +360,8 @@ pub struct RequestEnvelope {
 #[serde(deny_unknown_fields)]
 pub struct EventIngested {
     pub event_id: Uuid,
+    pub stored: bool,
+    pub duplicate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -296,6 +394,25 @@ pub struct DoctorReport {
     pub running_executions: usize,
     pub draft_rituals: usize,
     pub active_rituals: usize,
+    pub browser_adapters: usize,
+    pub vscode_adapters: usize,
+    pub active_browser_scopes: usize,
+    pub active_vscode_scopes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationReport {
+    pub core_connected: bool,
+    pub linux_adapters: usize,
+    pub browser_adapters: usize,
+    pub vscode_adapters: usize,
+    pub native_host_manifest: String,
+    pub permitted_browser_resources: usize,
+    pub active_browser_scopes: usize,
+    pub active_vscode_scopes: usize,
+    pub protocol_version: ProtocolVersion,
+    pub database_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -355,6 +472,8 @@ pub struct AdapterReport {
     pub instance_id: Uuid,
     pub connected: bool,
     pub capabilities: Vec<String>,
+    pub event_capabilities: Vec<String>,
+    pub permitted_resource_ids: Vec<Uuid>,
     pub connected_at: String,
     pub last_seen_at: String,
 }
@@ -385,6 +504,8 @@ pub enum ResponsePayload {
     ClientHelloAck(ClientHelloAck),
     #[serde(rename = "event.ingested")]
     EventIngested(EventIngested),
+    #[serde(rename = "event.ack")]
+    EventAck(EventAck),
     #[serde(rename = "events.list")]
     EventList(EventList),
     #[serde(rename = "system.status")]
@@ -423,6 +544,16 @@ pub enum ResponsePayload {
     ExecutionList(ExecutionList),
     #[serde(rename = "execution.show")]
     ExecutionShow(ExecutionRecord),
+    #[serde(rename = "observation.enabled")]
+    BrowserObservationEnabled(BrowserObservationEnabled),
+    #[serde(rename = "vscode.observation.enabled")]
+    VscodeObservationEnabled(VscodeObservationEnabled),
+    #[serde(rename = "observation.paused")]
+    ObservationPaused(ObservationScope),
+    #[serde(rename = "observations.list")]
+    ObservationList(ObservationList),
+    #[serde(rename = "integrations.status")]
+    IntegrationsStatus(IntegrationReport),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

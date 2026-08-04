@@ -90,6 +90,26 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "browser.tab.ensure_open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
         }
       ]
     },

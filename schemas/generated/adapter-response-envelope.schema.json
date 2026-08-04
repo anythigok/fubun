@@ -54,6 +54,33 @@
         "failed"
       ]
     },
+    "AdapterEventEmitRequest": {
+      "type": "object",
+      "required": [
+        "occurred_at",
+        "resource_id",
+        "sequence_no",
+        "type"
+      ],
+      "properties": {
+        "occurred_at": {
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence_no": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "type": {
+          "$ref": "#/definitions/EventType"
+        }
+      },
+      "additionalProperties": false
+    },
     "AdapterResponseBody": {
       "oneOf": [
         {
@@ -91,6 +118,24 @@
               ]
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/AdapterEventEmitRequest"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event.emit"
+              ]
+            }
+          }
         }
       ]
     },
@@ -105,6 +150,14 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "permitted_resource_ids": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "tools": {
@@ -131,6 +184,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "dev.fubun.dev.synthetic.v1",
+        "dev.fubun.browser.resource.opened.v1",
+        "dev.fubun.vscode.workspace.opened.v1"
+      ]
     },
     "ProtocolVersion": {
       "type": "object",

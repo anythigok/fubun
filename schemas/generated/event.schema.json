@@ -32,7 +32,7 @@
       ]
     },
     "data": {
-      "$ref": "#/definitions/SyntheticEventData"
+      "$ref": "#/definitions/EventData"
     },
     "id": {
       "type": "string",
@@ -113,10 +113,78 @@
       },
       "additionalProperties": false
     },
+    "EventData": {
+      "description": "Event payloads are intentionally small and semantic.  Raw URLs, paths, titles, tab identifiers, and file names are not representable here.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "counter",
+            "kind",
+            "label"
+          ],
+          "properties": {
+            "counter": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "synthetic"
+              ]
+            },
+            "label": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "resource_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "browser.resource.opened"
+              ]
+            },
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "resource_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vscode.workspace.opened"
+              ]
+            },
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      ]
+    },
     "EventType": {
       "type": "string",
       "enum": [
-        "dev.fubun.dev.synthetic.v1"
+        "dev.fubun.dev.synthetic.v1",
+        "dev.fubun.browser.resource.opened.v1",
+        "dev.fubun.vscode.workspace.opened.v1"
       ]
     },
     "PrivacyClass": {
@@ -125,23 +193,6 @@
         "normal",
         "sensitive"
       ]
-    },
-    "SyntheticEventData": {
-      "type": "object",
-      "required": [
-        "counter",
-        "label"
-      ],
-      "properties": {
-        "counter": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "label": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
     }
   }
 }

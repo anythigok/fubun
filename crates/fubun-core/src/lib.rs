@@ -14,16 +14,20 @@ use adapter::{
     AdapterDispatchErrorKind, AdapterEligibilityError, AdapterManager, AdapterRequirements,
 };
 use fubun_domain::{
-    ActionSpec, Approval, Execution, ExecutionStatus, ExecutionStep, ExecutionStepStatus, Resource,
-    ResourceKind, ResourceScope, Ritual, RitualDefinition, RitualStatus, RitualVersion,
-    TriggerKind, RITUAL_SCHEMA_VERSION,
+    canonical_web_url_hash, canonicalize_web_url, web_origin_pattern, ActionSpec, Actor,
+    AdapterIdentity, Approval, EventData, EventType, Execution, ExecutionStatus, ExecutionStep,
+    ExecutionStepStatus, ObservationScope, ObservationSource, ObservationStatus, PrivacyClass,
+    Resource, ResourceKind, ResourceScope, Ritual, RitualDefinition, RitualStatus, RitualVersion,
+    TriggerKind, EVENT_SPEC_VERSION, RITUAL_SCHEMA_VERSION,
 };
 use fubun_policy::{approval_fields, descriptor, validate_action};
 use fubun_protocol::{
-    read_json_frame, write_json_frame, ActionResult, AdapterHello, AdapterResponseEnvelope,
-    ClientHello, ClientHelloAck, DoctorReport, EmptyRequest, EventIngested, EventList, FrameError,
-    PreviewAction, RequestBody, RequestEnvelope, ResolvedResource, ResponseBody, ResponseEnvelope,
-    ResponsePayload, RitualPreview, StatusReport, CURRENT_PROTOCOL_VERSION,
+    read_json_frame, write_json_frame, ActionResult, AdapterEventAck, AdapterEventEmitRequest,
+    AdapterHello, AdapterRequestBody, AdapterRequestEnvelope, AdapterResponseBody,
+    AdapterResponseEnvelope, ClientHello, ClientHelloAck, DoctorReport, EmptyRequest, EventAck,
+    EventIngested, EventList, FrameError, PreviewAction, RequestBody, RequestEnvelope,
+    ResolvedResource, ResponseBody, ResponseEnvelope, ResponsePayload, RitualPreview, StatusReport,
+    CURRENT_PROTOCOL_VERSION,
 };
 use fubun_storage::{Storage, StorageError, StorageHandle};
 use thiserror::Error;
@@ -213,7 +217,8 @@ async fn handle_connection(
     }
     match first.body {
         RequestBody::AdapterHello(hello) => {
-            handle_adapter_connection(stream, first.request_id, hello, adapters, shutdown).await
+            handle_adapter_connection(stream, first.request_id, hello, adapters, storage, shutdown)
+                .await
         }
         RequestBody::ClientHello(hello) => {
             if hello.protocol_version.major != CURRENT_PROTOCOL_VERSION.major {
@@ -264,6 +269,7 @@ async fn handle_adapter_connection(
     request_id: Uuid,
     hello: AdapterHello,
     adapters: AdapterManager,
+    storage: StorageHandle,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), CoreError> {
     if let Err(error) = AdapterManager::validate_hello(&hello) {
@@ -287,7 +293,7 @@ async fn handle_adapter_connection(
     let (reader, mut writer) = stream.into_split();
     let (sender, mut receiver) = mpsc::channel(32);
     let instance_id = hello.instance_id;
-    if let Err(error) = adapters.register(hello, sender).await {
+    if let Err(error) = adapters.register(hello.clone(), sender.clone()).await {
         write_json_frame(
             &mut writer,
             &ResponseEnvelope::error(request_id, "protocol_error", error.to_string()),
@@ -310,7 +316,29 @@ async fn handle_adapter_connection(
             }
             response = read_json_frame::<_, AdapterResponseEnvelope>(&mut reader) => {
                 match response {
-                    Ok(Some(response)) if response.protocol_version.major == CURRENT_PROTOCOL_VERSION.major => adapters.resolve(response).await,
+                    Ok(Some(response)) if response.protocol_version.major == CURRENT_PROTOCOL_VERSION.major => {
+                        if let AdapterResponseBody::EventEmit(event) = &response.body {
+                            let ack = ingest_adapter_event(
+                                response.request_id,
+                                &hello,
+                                event.clone(),
+                                &storage,
+                            )
+                            .await;
+                            let _ = sender.send(AdapterRequestEnvelope {
+                                protocol_version: CURRENT_PROTOCOL_VERSION,
+                                request_id: response.request_id,
+                                action_execution_id: Uuid::nil(),
+                                body: AdapterRequestBody::EventAck(AdapterEventAck {
+                                    event_id: ack.event_id,
+                                    stored: ack.stored,
+                                    duplicate: ack.duplicate,
+                                }),
+                            }).await;
+                        } else {
+                            adapters.resolve(response).await;
+                        }
+                    }
                     Ok(Some(_)) => warn!("adapter response protocol major mismatch"),
                     Ok(None) | Err(_) => break,
                 }
@@ -352,6 +380,32 @@ async fn process_request(
             "handshake is only valid as the first request",
         ),
         RequestBody::EventIngest(payload) => ingest_response(id, payload.event, storage).await,
+        RequestBody::BrowserObservationEnable(payload) => {
+            browser_observation_enable_response(id, payload, storage).await
+        }
+        RequestBody::VscodeObservationEnable(payload) => {
+            vscode_observation_enable_response(id, payload, storage).await
+        }
+        RequestBody::ObservationPause(payload) => {
+            match storage.pause_observation_scope(payload.scope_id).await {
+                Ok(scope) => ResponseEnvelope::ok(id, ResponsePayload::ObservationPaused(scope)),
+                Err(StorageError::NotFound) => ResponseEnvelope::error(
+                    id,
+                    "scope_not_active",
+                    "observation scope is not active",
+                ),
+                Err(error) => storage_error(id, error),
+            }
+        }
+        RequestBody::ObservationsList(payload) => {
+            match storage.list_observation_scopes(payload.source).await {
+                Ok(scopes) => ResponseEnvelope::ok(
+                    id,
+                    ResponsePayload::ObservationList(fubun_protocol::ObservationList { scopes }),
+                ),
+                Err(error) => storage_error(id, error),
+            }
+        }
         RequestBody::EventsList(payload) => {
             match storage.list_events(payload.since, payload.limit).await {
                 Ok(events) => {
@@ -438,6 +492,55 @@ async fn process_request(
                 Err(error) => storage_error(id, error),
             }
         }
+        RequestBody::IntegrationsStatus(_) => {
+            let reports = adapters.reports().await;
+            let scopes = storage
+                .list_observation_scopes(None)
+                .await
+                .unwrap_or_default();
+            let browser_adapters = reports
+                .iter()
+                .filter(|report| report.adapter_id == "dev.fubun.browser.chromium")
+                .count();
+            let vscode_adapters = reports
+                .iter()
+                .filter(|report| report.adapter_id == "dev.fubun.vscode")
+                .count();
+            ResponseEnvelope::ok(
+                id,
+                ResponsePayload::IntegrationsStatus(fubun_protocol::IntegrationReport {
+                    core_connected: true,
+                    linux_adapters: reports
+                        .iter()
+                        .filter(|report| report.adapter_id == "dev.fubun.linux")
+                        .count(),
+                    browser_adapters,
+                    vscode_adapters,
+                    native_host_manifest: "unknown".to_owned(),
+                    permitted_browser_resources: reports
+                        .iter()
+                        .filter(|report| report.adapter_id == "dev.fubun.browser.chromium")
+                        .map(|report| report.permitted_resource_ids.len())
+                        .sum(),
+                    active_browser_scopes: scopes
+                        .iter()
+                        .filter(|scope| {
+                            scope.source == ObservationSource::BrowserChromium
+                                && scope.status == ObservationStatus::Active
+                        })
+                        .count(),
+                    active_vscode_scopes: scopes
+                        .iter()
+                        .filter(|scope| {
+                            scope.source == ObservationSource::VscodeWorkspace
+                                && scope.status == ObservationStatus::Active
+                        })
+                        .count(),
+                    protocol_version: CURRENT_PROTOCOL_VERSION,
+                    database_version: storage.schema_version().await.unwrap_or_default(),
+                }),
+            )
+        }
     }
 }
 
@@ -454,7 +557,11 @@ async fn ingest_response(
     match storage.insert_event(event).await {
         Ok(()) => ResponseEnvelope::ok(
             id,
-            ResponsePayload::EventIngested(EventIngested { event_id }),
+            ResponsePayload::EventIngested(EventIngested {
+                event_id,
+                stored: true,
+                duplicate: false,
+            }),
         ),
         Err(StorageError::DuplicateEvent) => ResponseEnvelope::error(
             id,
@@ -462,6 +569,134 @@ async fn ingest_response(
             "adapter_instance_id and sequence_no have already been stored",
         ),
         Err(error) => storage_error(id, error),
+    }
+}
+
+async fn ingest_adapter_event(
+    _request_id: Uuid,
+    hello: &AdapterHello,
+    payload: AdapterEventEmitRequest,
+    storage: &StorageHandle,
+) -> EventAck {
+    let event_id = Uuid::new_v4();
+    let expected = match hello.adapter_id.as_str() {
+        "dev.fubun.browser.chromium" => (
+            EventType::BrowserResourceOpenedV1,
+            "browser.chromium",
+            ObservationSource::BrowserChromium,
+            ResourceKind::WebPage,
+            "dev.fubun.browser.resource.opened.v1",
+        ),
+        "dev.fubun.vscode" => (
+            EventType::VscodeWorkspaceOpenedV1,
+            "vscode.workspace",
+            ObservationSource::VscodeWorkspace,
+            ResourceKind::Directory,
+            "dev.fubun.vscode.workspace.opened.v1",
+        ),
+        _ => {
+            return EventAck {
+                event_id,
+                stored: false,
+                duplicate: false,
+            }
+        }
+    };
+    if payload.event_type != expected.0
+        || !hello
+            .event_capabilities
+            .iter()
+            .any(|value| value == expected.4)
+        || (hello.adapter_id == "dev.fubun.browser.chromium"
+            && !hello
+                .status
+                .permitted_resource_ids
+                .contains(&payload.resource_id))
+    {
+        return EventAck {
+            event_id,
+            stored: false,
+            duplicate: false,
+        };
+    }
+    let Ok(resource) = storage.get_resource(payload.resource_id).await else {
+        return EventAck {
+            event_id,
+            stored: false,
+            duplicate: false,
+        };
+    };
+    if resource.kind != expected.3 {
+        return EventAck {
+            event_id,
+            stored: false,
+            duplicate: false,
+        };
+    }
+    let Ok(scopes) = storage.list_observation_scopes(Some(expected.2)).await else {
+        return EventAck {
+            event_id,
+            stored: false,
+            duplicate: false,
+        };
+    };
+    if !scopes.iter().any(|scope| {
+        scope.resource_id == payload.resource_id && scope.status == ObservationStatus::Active
+    }) {
+        return EventAck {
+            event_id,
+            stored: false,
+            duplicate: false,
+        };
+    }
+    let event = fubun_domain::Event {
+        spec_version: EVENT_SPEC_VERSION.to_owned(),
+        id: event_id,
+        event_type: expected.0,
+        source: expected.1.to_owned(),
+        occurred_at: payload.occurred_at,
+        received_at: OffsetDateTime::now_utc(),
+        actor: Actor::User,
+        adapter: AdapterIdentity {
+            id: hello.adapter_id.clone(),
+            version: hello.adapter_version.clone(),
+            instance_id: hello.instance_id,
+            sequence_no: payload.sequence_no,
+        },
+        context: None,
+        privacy: PrivacyClass::Normal,
+        data: match expected.0 {
+            EventType::BrowserResourceOpenedV1 => EventData::BrowserResourceOpened {
+                resource_id: payload.resource_id,
+            },
+            EventType::VscodeWorkspaceOpenedV1 => EventData::VscodeWorkspaceOpened {
+                resource_id: payload.resource_id,
+            },
+            EventType::SyntheticV1 => {
+                return EventAck {
+                    event_id,
+                    stored: false,
+                    duplicate: false,
+                }
+            }
+        },
+    };
+    match storage.insert_event(event).await {
+        Ok(()) => EventAck {
+            event_id,
+            stored: true,
+            duplicate: false,
+        },
+        Err(StorageError::DuplicateEvent) => EventAck {
+            event_id,
+            stored: false,
+            duplicate: true,
+        },
+        Err(_) => EventAck {
+            event_id,
+            stored: false,
+            duplicate: false,
+        },
     }
 }
 
@@ -529,6 +764,146 @@ async fn resource_create_response(
             id,
             "duplicate_resource",
             "a resource with the same canonical path already exists",
+        ),
+        Err(error) => storage_error(id, error),
+    }
+}
+
+async fn browser_observation_enable_response(
+    id: Uuid,
+    payload: fubun_protocol::BrowserObservationEnableRequest,
+    storage: &StorageHandle,
+) -> ResponseEnvelope {
+    let canonical = match canonicalize_web_url(&payload.url) {
+        Ok(value) => value,
+        Err(_) => return ResponseEnvelope::error(id, "invalid_resource", "invalid web URL"),
+    };
+    let now = OffsetDateTime::now_utc();
+    let candidate = Resource {
+        id: Uuid::new_v4(),
+        kind: ResourceKind::WebPage,
+        label: payload.label,
+        locator: canonical.clone(),
+        canonical_locator: canonical.clone(),
+        sensitivity: fubun_domain::Sensitivity::Normal,
+        scope: ResourceScope::Exact,
+        created_at: now,
+        updated_at: now,
+    };
+    if candidate.validate().is_err() {
+        return ResponseEnvelope::error(id, "invalid_resource", "invalid web resource");
+    }
+    let resource = match storage.create_resource(candidate).await {
+        Ok(resource) => resource,
+        Err(StorageError::DuplicateResource) => match storage.list_resources().await {
+            Ok(resources) => match resources.into_iter().find(|resource| {
+                resource.kind == ResourceKind::WebPage && resource.canonical_locator == canonical
+            }) {
+                Some(resource) => resource,
+                None => {
+                    return ResponseEnvelope::error(id, "invalid_resource", "web resource conflict")
+                }
+            },
+            Err(error) => return storage_error(id, error),
+        },
+        Err(error) => return storage_error(id, error),
+    };
+    let scope = ObservationScope {
+        id: Uuid::new_v4(),
+        source: ObservationSource::BrowserChromium,
+        resource_id: resource.id,
+        status: ObservationStatus::Active,
+        created_at: now,
+        updated_at: now,
+    };
+    let scope = match storage.ensure_observation_scope(scope).await {
+        Ok(scope) => scope,
+        Err(error) => return storage_error(id, error),
+    };
+    let origin_pattern = match web_origin_pattern(&canonical) {
+        Ok(pattern) => pattern,
+        Err(_) => return ResponseEnvelope::error(id, "invalid_resource", "invalid web origin"),
+    };
+    ResponseEnvelope::ok(
+        id,
+        ResponsePayload::BrowserObservationEnabled(fubun_protocol::BrowserObservationEnabled {
+            resource,
+            scope,
+            canonical_url_hash: canonical_web_url_hash(&canonical),
+            origin_pattern,
+        }),
+    )
+}
+
+async fn vscode_observation_enable_response(
+    id: Uuid,
+    payload: fubun_protocol::VscodeObservationEnableRequest,
+    storage: &StorageHandle,
+) -> ResponseEnvelope {
+    let input = PathBuf::from(&payload.absolute_path);
+    if !input.is_absolute() {
+        return ResponseEnvelope::error(id, "invalid_resource", "workspace path must be absolute");
+    }
+    let Ok(canonical) = fs::canonicalize(&input) else {
+        return ResponseEnvelope::error(
+            id,
+            "invalid_resource",
+            "workspace path cannot be canonicalized",
+        );
+    };
+    if !canonical.is_dir() {
+        return ResponseEnvelope::error(id, "invalid_resource", "workspace must be a directory");
+    }
+    let now = OffsetDateTime::now_utc();
+    let candidate = Resource {
+        id: Uuid::new_v4(),
+        kind: ResourceKind::Directory,
+        label: payload.label,
+        locator: payload.absolute_path,
+        canonical_locator: canonical.to_string_lossy().into_owned(),
+        sensitivity: fubun_domain::Sensitivity::Normal,
+        scope: ResourceScope::Exact,
+        created_at: now,
+        updated_at: now,
+    };
+    if candidate.validate().is_err() {
+        return ResponseEnvelope::error(id, "invalid_resource", "invalid workspace resource");
+    }
+    let resource = match storage.create_resource(candidate).await {
+        Ok(resource) => resource,
+        Err(StorageError::DuplicateResource) => match storage.list_resources().await {
+            Ok(resources) => match resources.into_iter().find(|resource| {
+                resource.kind == ResourceKind::Directory
+                    && resource.canonical_locator == canonical.to_string_lossy()
+            }) {
+                Some(resource) => resource,
+                None => {
+                    return ResponseEnvelope::error(id, "invalid_resource", "workspace conflict")
+                }
+            },
+            Err(error) => return storage_error(id, error),
+        },
+        Err(error) => return storage_error(id, error),
+    };
+    let scope = ObservationScope {
+        id: Uuid::new_v4(),
+        source: ObservationSource::VscodeWorkspace,
+        resource_id: resource.id,
+        status: ObservationStatus::Active,
+        created_at: now,
+        updated_at: now,
+    };
+    match storage.ensure_observation_scope(scope).await {
+        Ok(scope) => ResponseEnvelope::ok(
+            id,
+            ResponsePayload::VscodeObservationEnabled(fubun_protocol::VscodeObservationEnabled {
+                canonical_path_hash: canonical_web_url_hash(&format!(
+                    "file://{}",
+                    resource.canonical_locator
+                )),
+                resource,
+                scope,
+            }),
         ),
         Err(error) => storage_error(id, error),
     }
@@ -761,6 +1136,47 @@ async fn build_preview(
                 }
             }
             ActionSpec::DesktopNotificationShow { .. } => {}
+            ActionSpec::BrowserTabEnsureOpen { resource_id } => {
+                match storage.get_resource(*resource_id).await {
+                    Ok(resource) => {
+                        resource_exists = Some(true);
+                        resource_kind_matches = Some(resource.kind == ResourceKind::WebPage);
+                        resource_path_matches = Some(
+                            resource.kind == ResourceKind::WebPage
+                                && canonicalize_web_url(&resource.canonical_locator)
+                                    .map(|value| value == resource.canonical_locator)
+                                    .unwrap_or(false),
+                        );
+                        if resource_kind_matches != Some(true) {
+                            action_warnings.push("resource is not a web page".to_owned());
+                        }
+                        if resource_path_matches != Some(true) {
+                            action_warnings
+                                .push("web resource canonical URL is invalid".to_owned());
+                        }
+                        let scopes = storage
+                            .list_observation_scopes(Some(ObservationSource::BrowserChromium))
+                            .await
+                            .map_err(|_| {
+                                (
+                                    "internal_error".to_owned(),
+                                    "observation scope lookup failed".to_owned(),
+                                )
+                            })?;
+                        if !scopes.iter().any(|scope| {
+                            scope.resource_id == *resource_id
+                                && scope.status == ObservationStatus::Active
+                        }) {
+                            action_warnings
+                                .push("browser observation scope is not active".to_owned());
+                        }
+                    }
+                    Err(_) => {
+                        resource_exists = Some(false);
+                        action_warnings.push("resource was not found".to_owned());
+                    }
+                }
+            }
         }
         if action.validate().is_err() {
             action_warnings.push("action validation failed".to_owned());
@@ -777,7 +1193,7 @@ async fn build_preview(
             revertability: format!("{:?}", descriptor.revertability),
             required_capability: descriptor.required_capability.to_owned(),
             adapter_connected: eligible,
-            required_tool_available: Some(eligible),
+            required_tool_available: requirements.required_tool.map(|_| eligible),
             resource_exists,
             resource_path_matches,
             resource_kind_matches,
@@ -1066,6 +1482,41 @@ async fn preflight(
             }
             ActionSpec::LinuxAppEnsureRunning { .. } => {}
             ActionSpec::DesktopNotificationShow { .. } => {}
+            ActionSpec::BrowserTabEnsureOpen { resource_id } => {
+                let resource = storage.get_resource(*resource_id).await.map_err(|_| {
+                    (
+                        "resource_not_found".to_owned(),
+                        "web resource was not found".to_owned(),
+                    )
+                })?;
+                if resource.kind != ResourceKind::WebPage
+                    || canonicalize_web_url(&resource.canonical_locator)
+                        .map(|value| value != resource.canonical_locator)
+                        .unwrap_or(true)
+                {
+                    return Err((
+                        "resource_changed".to_owned(),
+                        "web resource canonical URL changed".to_owned(),
+                    ));
+                }
+                let scopes = storage
+                    .list_observation_scopes(Some(ObservationSource::BrowserChromium))
+                    .await
+                    .map_err(|_| {
+                        (
+                            "internal_error".to_owned(),
+                            "observation scope lookup failed".to_owned(),
+                        )
+                    })?;
+                if !scopes.iter().any(|scope| {
+                    scope.resource_id == *resource_id && scope.status == ObservationStatus::Active
+                }) {
+                    return Err((
+                        "observation_inactive".to_owned(),
+                        "browser observation scope is not active".to_owned(),
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -1113,7 +1564,8 @@ async fn execute_steps(
                 )
             })?;
         let resolved = match &action {
-            ActionSpec::LinuxPathOpen { resource_id } => {
+            ActionSpec::LinuxPathOpen { resource_id }
+            | ActionSpec::BrowserTabEnsureOpen { resource_id } => {
                 let resource = storage.get_resource(*resource_id).await.map_err(|_| {
                     (
                         "resource_not_found".to_owned(),
@@ -1372,6 +1824,24 @@ async fn doctor_response(
                 running_executions: running,
                 draft_rituals: draft,
                 active_rituals: active,
+                browser_adapters: adapters
+                    .connected_count_by_id("dev.fubun.browser.chromium")
+                    .await,
+                vscode_adapters: adapters.connected_count_by_id("dev.fubun.vscode").await,
+                active_browser_scopes: storage
+                    .list_observation_scopes(Some(ObservationSource::BrowserChromium))
+                    .await
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|scope| scope.status == ObservationStatus::Active)
+                    .count(),
+                active_vscode_scopes: storage
+                    .list_observation_scopes(Some(ObservationSource::VscodeWorkspace))
+                    .await
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|scope| scope.status == ObservationStatus::Active)
+                    .count(),
             }),
         ),
         _ => ResponseEnvelope::error(request_id, "storage_error", "database check failed"),

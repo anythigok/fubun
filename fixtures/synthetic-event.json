@@ -18,6 +18,7 @@
   },
   "privacy": "normal",
   "data": {
+    "kind": "synthetic",
     "label": "phase-1-smoke",
     "counter": 1
   }

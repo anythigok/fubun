@@ -1,15 +1,17 @@
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
 use clap::{Args, Parser, Subcommand};
 use fubun_core::{paths::FubunPaths, ClientError, FubunClient};
-use fubun_domain::{Event, RitualDefinition};
+use fubun_domain::{Event, ObservationSource, RitualDefinition};
 use fubun_protocol::{
     DoctorReport, EmptyRequest, EventIngestRequest, EventsListRequest, ExecutionIdRequest,
-    RequestBody, ResourceCreateRequest, ResourceIdRequest, ResponsePayload, RitualActivateRequest,
-    RitualCreateRequest, RitualIdRequest, RitualUpdateRequest,
+    ObservationListRequest, ObservationPauseRequest, RequestBody, ResourceCreateRequest,
+    ResourceIdRequest, ResponsePayload, RitualActivateRequest, RitualCreateRequest,
+    RitualIdRequest, RitualUpdateRequest,
 };
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
@@ -51,6 +53,22 @@ enum Command {
     Execution {
         #[command(subcommand)]
         command: ExecutionCommand,
+    },
+    Observations {
+        #[command(subcommand)]
+        command: ObservationsCommand,
+    },
+    Observation {
+        #[command(subcommand)]
+        command: ObservationCommand,
+    },
+    Integrations {
+        #[command(subcommand)]
+        command: IntegrationsCommand,
+    },
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
     },
 }
 
@@ -134,6 +152,52 @@ enum ExecutionCommand {
     Show { execution_id: Uuid },
 }
 
+#[derive(Debug, Subcommand)]
+enum ObservationsCommand {
+    List {
+        #[arg(long)]
+        source: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ObservationCommand {
+    Pause { scope_id: Uuid },
+}
+
+#[derive(Debug, Subcommand)]
+enum IntegrationsCommand {
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum BrowserCommand {
+    Host {
+        #[command(subcommand)]
+        command: BrowserHostCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum BrowserHostCommand {
+    Install(BrowserHostInstall),
+    Status,
+    Uninstall {
+        #[arg(long)]
+        browser: String,
+    },
+}
+
+#[derive(Debug, Args)]
+struct BrowserHostInstall {
+    #[arg(long)]
+    browser: String,
+    #[arg(long = "extension-id")]
+    extension_id: String,
+    #[arg(long = "host-path")]
+    host_path: PathBuf,
+}
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error("invalid duration: {0}; expected a positive integer followed by s, m, h, or d")]
@@ -176,6 +240,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Ritual { command } => ritual_command(&paths.socket_path, command).await?,
         Command::Adapter { command } => adapter_command(&paths.socket_path, command).await?,
         Command::Execution { command } => execution_command(&paths.socket_path, command).await?,
+        Command::Observations { command } => {
+            observations_command(&paths.socket_path, command).await?
+        }
+        Command::Observation { command } => {
+            observation_command(&paths.socket_path, command).await?
+        }
+        Command::Integrations { command } => {
+            integrations_command(&paths.socket_path, command).await?
+        }
+        Command::Browser { command } => browser_command(command)?,
     }
     Ok(())
 }
@@ -253,11 +327,15 @@ async fn doctor(paths: &FubunPaths) -> Result<(), CliError> {
         running_executions,
         draft_rituals,
         active_rituals,
+        browser_adapters,
+        vscode_adapters,
+        active_browser_scopes,
+        active_vscode_scopes,
     }) = payload
     else {
         return Err(CliError::UnexpectedResponse);
     };
-    println!("daemon connection: ok\nprotocol: 1.0\ndatabase path: {database_path}\ndatabase status: {database_status}\nschema version: {schema_version}\nadapters: {connected_adapters}\ngtk-launch: {gtk_launch_available}\nxdg-open: {xdg_open_available}\nnotify-send: {notify_send_available}\naction registry: {action_registry_version}\nritual schema: {ritual_schema_version}\nrunning executions: {running_executions}\ndraft rituals: {draft_rituals}\nactive rituals: {active_rituals}");
+    println!("daemon connection: ok\nprotocol: 1.0\ndatabase path: {database_path}\ndatabase status: {database_status}\nschema version: {schema_version}\nadapters: {connected_adapters}\nbrowser adapters: {browser_adapters}\nvscode adapters: {vscode_adapters}\nactive browser scopes: {active_browser_scopes}\nactive vscode scopes: {active_vscode_scopes}\ngtk-launch: {gtk_launch_available}\nxdg-open: {xdg_open_available}\nnotify-send: {notify_send_available}\naction registry: {action_registry_version}\nritual schema: {ritual_schema_version}\nrunning executions: {running_executions}\ndraft rituals: {draft_rituals}\nactive rituals: {active_rituals}");
     Ok(())
 }
 
@@ -391,6 +469,173 @@ async fn execution_command(socket_path: &Path, command: ExecutionCommand) -> Res
         "{}",
         serde_json::to_string_pretty(&client.request(body).await?)?
     );
+    Ok(())
+}
+
+async fn observations_command(
+    socket_path: &Path,
+    command: ObservationsCommand,
+) -> Result<(), CliError> {
+    let ObservationsCommand::List { source } = command;
+    let source = source
+        .map(|value| match value.as_str() {
+            "browser.chromium" => Ok(ObservationSource::BrowserChromium),
+            "vscode.workspace" => Ok(ObservationSource::VscodeWorkspace),
+            _ => Err(CliError::UnexpectedResponse),
+        })
+        .transpose()?;
+    let mut client = connect(socket_path).await?;
+    let payload = client
+        .request(RequestBody::ObservationsList(ObservationListRequest {
+            source,
+        }))
+        .await?;
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+async fn observation_command(
+    socket_path: &Path,
+    command: ObservationCommand,
+) -> Result<(), CliError> {
+    let ObservationCommand::Pause { scope_id } = command;
+    let mut client = connect(socket_path).await?;
+    let payload = client
+        .request(RequestBody::ObservationPause(ObservationPauseRequest {
+            scope_id,
+        }))
+        .await?;
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+async fn integrations_command(
+    socket_path: &Path,
+    command: IntegrationsCommand,
+) -> Result<(), CliError> {
+    let IntegrationsCommand::Status = command;
+    let mut client = connect(socket_path).await?;
+    let payload = client
+        .request(RequestBody::IntegrationsStatus(EmptyRequest::default()))
+        .await?;
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+fn browser_command(command: BrowserCommand) -> Result<(), CliError> {
+    let BrowserCommand::Host { command } = command;
+    match command {
+        BrowserHostCommand::Install(args) => install_native_host(args),
+        BrowserHostCommand::Status => {
+            let (config, _) = native_host_paths("chrome")?;
+            println!(
+                "config: {}\nchrome: {}\nchromium: {}",
+                config.display(),
+                native_host_paths("chrome")?.1.exists(),
+                native_host_paths("chromium")?.1.exists()
+            );
+            Ok(())
+        }
+        BrowserHostCommand::Uninstall { browser } => uninstall_native_host(&browser),
+    }
+}
+
+fn native_host_paths(browser: &str) -> Result<(PathBuf, PathBuf), CliError> {
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok_or(CliError::UnexpectedResponse)?;
+    let manifest_dir = match browser {
+        "chrome" => config_home.join("google-chrome/NativeMessagingHosts"),
+        "chromium" => config_home.join("chromium/NativeMessagingHosts"),
+        _ => return Err(CliError::UnexpectedResponse),
+    };
+    Ok((
+        config_home.join("fubun/browser-native-host.json"),
+        manifest_dir.join("dev.fubun.browser.json"),
+    ))
+}
+
+fn validate_extension_id(value: &str) -> Result<(), CliError> {
+    if value.len() != 32 || !value.bytes().all(|byte| (b'a'..=b'p').contains(&byte)) {
+        return Err(CliError::UnexpectedResponse);
+    }
+    Ok(())
+}
+
+fn install_native_host(args: BrowserHostInstall) -> Result<(), CliError> {
+    validate_extension_id(&args.extension_id)?;
+    let host_path = fs::canonicalize(&args.host_path)?;
+    let metadata = fs::metadata(&host_path)?;
+    if !host_path.is_absolute() || !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0
+    {
+        return Err(CliError::UnexpectedResponse);
+    }
+    let (config_path, manifest_path) = native_host_paths(&args.browser)?;
+    let config_dir = config_path.parent().ok_or(CliError::UnexpectedResponse)?;
+    fs::create_dir_all(config_dir)?;
+    fs::set_permissions(config_dir, fs::Permissions::from_mode(0o700))?;
+    let mut ids = if config_path.exists() {
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&config_path)?)?
+            .get("allowed_extension_ids")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if !ids.contains(&args.extension_id) {
+        ids.push(args.extension_id.clone());
+    }
+    ids.sort();
+    let config = serde_json::json!({"allowed_extension_ids": ids});
+    atomic_private_write(&config_path, serde_json::to_vec_pretty(&config)?)?;
+    let manifest_dir = manifest_path.parent().ok_or(CliError::UnexpectedResponse)?;
+    fs::create_dir_all(manifest_dir)?;
+    fs::set_permissions(manifest_dir, fs::Permissions::from_mode(0o700))?;
+    let manifest = serde_json::json!({
+        "name": "dev.fubun.browser",
+        "description": "Fubun browser integration",
+        "path": host_path,
+        "type": "stdio",
+        "allowed_origins": [format!("chrome-extension://{}/", args.extension_id)]
+    });
+    atomic_private_write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+    println!("installed {}", manifest_path.display());
+    Ok(())
+}
+
+fn uninstall_native_host(browser: &str) -> Result<(), CliError> {
+    let (config_path, manifest_path) = native_host_paths(browser)?;
+    if manifest_path.exists() {
+        fs::remove_file(manifest_path)?;
+    }
+    let other_browser = if browser == "chrome" {
+        "chromium"
+    } else {
+        "chrome"
+    };
+    let other_manifest_exists = native_host_paths(other_browser)?.1.exists();
+    if config_path.exists() && !other_manifest_exists {
+        fs::remove_file(config_path)?;
+    }
+    Ok(())
+}
+
+fn atomic_private_write(path: &Path, bytes: Vec<u8>) -> Result<(), CliError> {
+    let parent = path.parent().ok_or(CliError::UnexpectedResponse)?;
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, bytes)?;
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    fs::rename(temporary, path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 

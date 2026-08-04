@@ -84,6 +84,26 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource_id",
+            "type"
+          ],
+          "properties": {
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "browser.tab.ensure_open.v1"
+              ]
+            }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -145,8 +165,10 @@
         "capabilities",
         "connected",
         "connected_at",
+        "event_capabilities",
         "instance_id",
         "last_seen_at",
+        "permitted_resource_ids",
         "version"
       ],
       "properties": {
@@ -165,6 +187,12 @@
         "connected_at": {
           "type": "string"
         },
+        "event_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "instance_id": {
           "type": "string",
           "format": "uuid"
@@ -172,8 +200,39 @@
         "last_seen_at": {
           "type": "string"
         },
+        "permitted_resource_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
         "version": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrowserObservationEnabled": {
+      "type": "object",
+      "required": [
+        "canonical_url_hash",
+        "origin_pattern",
+        "resource",
+        "scope"
+      ],
+      "properties": {
+        "canonical_url_hash": {
+          "type": "string"
+        },
+        "origin_pattern": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/definitions/Resource"
+        },
+        "scope": {
+          "$ref": "#/definitions/ObservationScope"
         }
       },
       "additionalProperties": false
@@ -220,7 +279,10 @@
       "type": "object",
       "required": [
         "action_registry_version",
+        "active_browser_scopes",
         "active_rituals",
+        "active_vscode_scopes",
+        "browser_adapters",
         "connected_adapters",
         "database_path",
         "database_status",
@@ -230,13 +292,29 @@
         "ritual_schema_version",
         "running_executions",
         "schema_version",
+        "vscode_adapters",
         "xdg_open_available"
       ],
       "properties": {
         "action_registry_version": {
           "type": "string"
         },
+        "active_browser_scopes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
         "active_rituals": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "active_vscode_scopes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "browser_adapters": {
           "type": "integer",
           "format": "uint",
           "minimum": 0.0
@@ -274,6 +352,11 @@
         "schema_version": {
           "type": "integer",
           "format": "uint32",
+          "minimum": 0.0
+        },
+        "vscode_adapters": {
+          "type": "integer",
+          "format": "uint",
           "minimum": 0.0
         },
         "xdg_open_available": {
@@ -330,7 +413,7 @@
           ]
         },
         "data": {
-          "$ref": "#/definitions/SyntheticEventData"
+          "$ref": "#/definitions/EventData"
         },
         "id": {
           "type": "string",
@@ -357,15 +440,110 @@
       },
       "additionalProperties": false
     },
-    "EventIngested": {
+    "EventAck": {
       "type": "object",
       "required": [
-        "event_id"
+        "duplicate",
+        "event_id",
+        "stored"
       ],
       "properties": {
+        "duplicate": {
+          "type": "boolean"
+        },
         "event_id": {
           "type": "string",
           "format": "uuid"
+        },
+        "stored": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventData": {
+      "description": "Event payloads are intentionally small and semantic.  Raw URLs, paths, titles, tab identifiers, and file names are not representable here.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "counter",
+            "kind",
+            "label"
+          ],
+          "properties": {
+            "counter": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "synthetic"
+              ]
+            },
+            "label": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "resource_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "browser.resource.opened"
+              ]
+            },
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "resource_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vscode.workspace.opened"
+              ]
+            },
+            "resource_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      ]
+    },
+    "EventIngested": {
+      "type": "object",
+      "required": [
+        "duplicate",
+        "event_id",
+        "stored"
+      ],
+      "properties": {
+        "duplicate": {
+          "type": "boolean"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "stored": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -388,7 +566,9 @@
     "EventType": {
       "type": "string",
       "enum": [
-        "dev.fubun.dev.synthetic.v1"
+        "dev.fubun.dev.synthetic.v1",
+        "dev.fubun.browser.resource.opened.v1",
+        "dev.fubun.vscode.workspace.opened.v1"
       ]
     },
     "Execution": {
@@ -577,6 +757,131 @@
         "stop"
       ]
     },
+    "IntegrationReport": {
+      "type": "object",
+      "required": [
+        "active_browser_scopes",
+        "active_vscode_scopes",
+        "browser_adapters",
+        "core_connected",
+        "database_version",
+        "linux_adapters",
+        "native_host_manifest",
+        "permitted_browser_resources",
+        "protocol_version",
+        "vscode_adapters"
+      ],
+      "properties": {
+        "active_browser_scopes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "active_vscode_scopes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "browser_adapters": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "core_connected": {
+          "type": "boolean"
+        },
+        "database_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "linux_adapters": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "native_host_manifest": {
+          "type": "string"
+        },
+        "permitted_browser_resources": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "protocol_version": {
+          "$ref": "#/definitions/ProtocolVersion"
+        },
+        "vscode_adapters": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationList": {
+      "type": "object",
+      "required": [
+        "scopes"
+      ],
+      "properties": {
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ObservationScope"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationScope": {
+      "type": "object",
+      "required": [
+        "created_at",
+        "id",
+        "resource_id",
+        "source",
+        "status",
+        "updated_at"
+      ],
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source": {
+          "$ref": "#/definitions/ObservationSource"
+        },
+        "status": {
+          "$ref": "#/definitions/ObservationStatus"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservationSource": {
+      "type": "string",
+      "enum": [
+        "browser.chromium",
+        "vscode.workspace"
+      ]
+    },
+    "ObservationStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused"
+      ]
+    },
     "PreviewAction": {
       "type": "object",
       "required": [
@@ -727,7 +1032,8 @@
       "type": "string",
       "enum": [
         "filesystem.file",
-        "filesystem.directory"
+        "filesystem.directory",
+        "web.page"
       ]
     },
     "ResourceList": {
@@ -825,6 +1131,24 @@
               "type": "string",
               "enum": [
                 "event.ingested"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/EventAck"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "event.ack"
               ]
             }
           }
@@ -1170,6 +1494,96 @@
               ]
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/BrowserObservationEnabled"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "observation.enabled"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/VscodeObservationEnabled"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vscode.observation.enabled"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ObservationScope"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "observation.paused"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/ObservationList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "observations.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/IntegrationReport"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "integrations.status"
+              ]
+            }
+          }
         }
       ]
     },
@@ -1415,28 +1829,31 @@
       },
       "additionalProperties": false
     },
-    "SyntheticEventData": {
-      "type": "object",
-      "required": [
-        "counter",
-        "label"
-      ],
-      "properties": {
-        "counter": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "label": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "TriggerKind": {
       "type": "string",
       "enum": [
         "manual"
       ]
+    },
+    "VscodeObservationEnabled": {
+      "type": "object",
+      "required": [
+        "canonical_path_hash",
+        "resource",
+        "scope"
+      ],
+      "properties": {
+        "canonical_path_hash": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/definitions/Resource"
+        },
+        "scope": {
+          "$ref": "#/definitions/ObservationScope"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }
