@@ -15,6 +15,10 @@ use fubun_domain::{
     Resource, ResourceKind, ResourceScope, Ritual, RitualDefinition, RitualStatus, RitualVersion,
     Sensitivity, TriggerKind, ValidationError,
 };
+use fubun_mining::{
+    DiscoveryRun, DiscoveryRunStatus, DiscoveredSession, DiscoveredSuggestion, SessionEvent,
+    SuggestionStatus,
+};
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension};
 use serde_json::Value;
 use thiserror::Error;
@@ -22,7 +26,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -56,6 +60,22 @@ pub enum StorageError {
     DuplicateResource,
     #[error("ritual is already running")]
     RitualAlreadyRunning,
+    #[error("discovery run is already running")]
+    DiscoveryAlreadyRunning,
+    #[error("discovery input is too large")]
+    DiscoveryInputTooLarge,
+    #[error("suggestion is in an invalid state")]
+    SuggestionInvalidState,
+    #[error("suggestion evidence is stale")]
+    SuggestionStale,
+    #[error("invalid snooze duration")]
+    InvalidSnoozeDuration,
+    #[error("discovery run was not found")]
+    DiscoveryNotFound,
+    #[error("session was not found")]
+    SessionNotFound,
+    #[error("suggestion was not found")]
+    SuggestionNotFound,
     #[error("stored data is invalid: {0}")]
     InvalidData(String),
 }
@@ -101,8 +121,36 @@ enum Operation {
     EnsureObservationScope(ObservationScope),
     ListObservationScopes(Option<ObservationSource>),
     PauseObservationScope(Uuid),
+    StartDiscoveryRun(DiscoveryRun),
+    AbortRunningDiscoveryRuns,
+    PersistDiscovery {
+        run: DiscoveryRun,
+        sessions: Vec<DiscoveredSession>,
+        suggestions: Vec<DiscoveredSuggestion>,
+    },
+    ListDiscoveryRuns,
+    ListSessions(Option<Uuid>),
+    GetSession(Uuid),
+    ListSuggestions {
+        status: Option<SuggestionStatus>,
+        workspace_resource_id: Option<Uuid>,
+    },
+    GetSuggestion(Uuid),
+    SetSuggestionStatus {
+        suggestion_id: Uuid,
+        status: SuggestionStatus,
+        until: Option<OffsetDateTime>,
+    },
+    AcceptSuggestion {
+        suggestion_id: Uuid,
+        name: Option<String>,
+        ritual: Ritual,
+        version: RitualVersion,
+        definition: RitualDefinition,
+    },
 }
 
+#[allow(clippy::large_enum_variant)]
 enum StorageResponse {
     Unit,
     Events(Vec<Event>),
@@ -128,6 +176,17 @@ enum StorageResponse {
     },
     ObservationScope(ObservationScope),
     ObservationScopes(Vec<ObservationScope>),
+    DiscoveryRun(DiscoveryRun),
+    DiscoveryRuns(Vec<DiscoveryRun>),
+    Sessions(Vec<DiscoveredSession>),
+    Session(DiscoveredSession),
+    Suggestions(Vec<DiscoveredSuggestion>),
+    Suggestion {
+        suggestion: DiscoveredSuggestion,
+        status: SuggestionStatus,
+        snoozed_until: Option<OffsetDateTime>,
+        accepted_ritual_id: Option<Uuid>,
+    },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -502,6 +561,81 @@ impl StorageHandle {
         }
     }
 
+    pub async fn start_discovery_run(&self, run: DiscoveryRun) -> Result<(), StorageError> {
+        match self.request(Operation::StartDiscoveryRun(run)).await? {
+            StorageResponse::Unit => Ok(()),
+            _ => Err(StorageError::InvalidData("unexpected discovery start response".to_owned())),
+        }
+    }
+
+    pub async fn persist_discovery(
+        &self,
+        run: DiscoveryRun,
+        sessions: Vec<DiscoveredSession>,
+        suggestions: Vec<DiscoveredSuggestion>,
+    ) -> Result<DiscoveryRun, StorageError> {
+        match self.request(Operation::PersistDiscovery { run, sessions, suggestions }).await? {
+            StorageResponse::DiscoveryRun(run) => Ok(run),
+            _ => Err(StorageError::InvalidData("unexpected discovery response".to_owned())),
+        }
+    }
+
+    pub async fn abort_running_discovery_runs(&self) -> Result<(), StorageError> {
+        match self.request(Operation::AbortRunningDiscoveryRuns).await? {
+            StorageResponse::Unit => Ok(()),
+            _ => Err(StorageError::InvalidData("unexpected discovery abort response".to_owned())),
+        }
+    }
+
+    pub async fn list_discovery_runs(&self) -> Result<Vec<DiscoveryRun>, StorageError> {
+        match self.request(Operation::ListDiscoveryRuns).await? {
+            StorageResponse::DiscoveryRuns(runs) => Ok(runs),
+            _ => Err(StorageError::InvalidData("unexpected discovery list response".to_owned())),
+        }
+    }
+
+    pub async fn list_sessions(&self, workspace: Option<Uuid>) -> Result<Vec<DiscoveredSession>, StorageError> {
+        match self.request(Operation::ListSessions(workspace)).await? {
+            StorageResponse::Sessions(sessions) => Ok(sessions),
+            _ => Err(StorageError::InvalidData("unexpected session list response".to_owned())),
+        }
+    }
+
+    pub async fn get_session(&self, id: Uuid) -> Result<DiscoveredSession, StorageError> {
+        match self.request(Operation::GetSession(id)).await? {
+            StorageResponse::Session(session) => Ok(session),
+            _ => Err(StorageError::InvalidData("unexpected session response".to_owned())),
+        }
+    }
+
+    pub async fn list_suggestions(&self, status: Option<SuggestionStatus>, workspace: Option<Uuid>) -> Result<Vec<DiscoveredSuggestion>, StorageError> {
+        match self.request(Operation::ListSuggestions { status, workspace_resource_id: workspace }).await? {
+            StorageResponse::Suggestions(suggestions) => Ok(suggestions),
+            _ => Err(StorageError::InvalidData("unexpected suggestion list response".to_owned())),
+        }
+    }
+
+    pub async fn get_suggestion(&self, id: Uuid) -> Result<(DiscoveredSuggestion, SuggestionStatus, Option<OffsetDateTime>, Option<Uuid>), StorageError> {
+        match self.request(Operation::GetSuggestion(id)).await? {
+            StorageResponse::Suggestion { suggestion, status, snoozed_until, accepted_ritual_id } => Ok((suggestion, status, snoozed_until, accepted_ritual_id)),
+            _ => Err(StorageError::InvalidData("unexpected suggestion response".to_owned())),
+        }
+    }
+
+    pub async fn set_suggestion_status(&self, id: Uuid, status: SuggestionStatus, until: Option<OffsetDateTime>) -> Result<(DiscoveredSuggestion, SuggestionStatus, Option<OffsetDateTime>, Option<Uuid>), StorageError> {
+        match self.request(Operation::SetSuggestionStatus { suggestion_id: id, status, until }).await? {
+            StorageResponse::Suggestion { suggestion, status, snoozed_until, accepted_ritual_id } => Ok((suggestion, status, snoozed_until, accepted_ritual_id)),
+            _ => Err(StorageError::InvalidData("unexpected suggestion status response".to_owned())),
+        }
+    }
+
+    pub async fn accept_suggestion(&self, suggestion_id: Uuid, name: Option<String>, ritual: Ritual, version: RitualVersion, definition: RitualDefinition) -> Result<(Ritual, RitualVersion, RitualDefinition), StorageError> {
+        match self.request(Operation::AcceptSuggestion { suggestion_id, name, ritual, version, definition }).await? {
+            StorageResponse::RitualRecord { ritual, version, definition } => Ok((ritual, version, definition)),
+            _ => Err(StorageError::InvalidData("unexpected suggestion accept response".to_owned())),
+        }
+    }
+
     #[must_use]
     pub fn database_path(&self) -> &Path {
         self.database_path.as_path()
@@ -739,6 +873,93 @@ fn migrate(connection: &mut Connection) -> Result<(), StorageError> {
         transaction.execute(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
             params![4_u32, now],
+        )?;
+        transaction.commit()?;
+    }
+    let current = current_schema_version(connection)?;
+    if current == 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE discovery_runs (
+                id TEXT PRIMARY KEY,
+                algorithm_version TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','aborted')),
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                input_event_count INTEGER NOT NULL,
+                sessions_upserted INTEGER NOT NULL,
+                candidates_evaluated INTEGER NOT NULL,
+                suggestions_created INTEGER NOT NULL,
+                failure_code TEXT
+            );
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                algorithm_version TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK(kind = 'workspace_start'),
+                workspace_resource_id TEXT NOT NULL,
+                anchor_event_id TEXT NOT NULL UNIQUE,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                event_count INTEGER NOT NULL,
+                eligible INTEGER NOT NULL,
+                FOREIGN KEY(workspace_resource_id) REFERENCES resources(id),
+                FOREIGN KEY(anchor_event_id) REFERENCES events(id)
+            );
+            CREATE TABLE session_events (
+                session_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                received_at TEXT NOT NULL,
+                resource_id TEXT NOT NULL,
+                is_anchor INTEGER NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
+                FOREIGN KEY(resource_id) REFERENCES resources(id),
+                UNIQUE(session_id, ordinal),
+                UNIQUE(session_id, event_id)
+            );
+            CREATE TABLE suggestions (
+                id TEXT PRIMARY KEY,
+                algorithm_version TEXT NOT NULL,
+                workspace_resource_id TEXT NOT NULL,
+                pattern_fingerprint TEXT NOT NULL UNIQUE,
+                support_sessions INTEGER NOT NULL,
+                eligible_sessions INTEGER NOT NULL,
+                confidence_basis_points INTEGER NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                observation_span_seconds INTEGER NOT NULL,
+                median_completion_ms INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending','snoozed','dismissed','accepted','blocked')),
+                snoozed_until TEXT,
+                accepted_ritual_id TEXT,
+                FOREIGN KEY(workspace_resource_id) REFERENCES resources(id),
+                FOREIGN KEY(accepted_ritual_id) REFERENCES rituals(id)
+            );
+            CREATE TABLE suggestion_actions (
+                suggestion_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                resource_id TEXT NOT NULL,
+                FOREIGN KEY(suggestion_id) REFERENCES suggestions(id) ON DELETE CASCADE,
+                FOREIGN KEY(resource_id) REFERENCES resources(id),
+                UNIQUE(suggestion_id, ordinal)
+            );
+            CREATE TABLE suggestion_support_sessions (
+                suggestion_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                FOREIGN KEY(suggestion_id) REFERENCES suggestions(id) ON DELETE CASCADE,
+                FOREIGN KEY(session_id) REFERENCES sessions(id),
+                UNIQUE(suggestion_id, session_id)
+            );
+            CREATE INDEX sessions_workspace_idx ON sessions(workspace_resource_id);
+            CREATE INDEX suggestions_status_idx ON suggestions(status, updated_at);",
+        )?;
+        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+            params![5_u32, now],
         )?;
         transaction.commit()?;
     }
@@ -1026,7 +1247,268 @@ fn execute_operation(
             }
             Ok(StorageResponse::ObservationScope(scope))
         }
+        Operation::StartDiscoveryRun(run) => {
+            let running: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM discovery_runs WHERE status = 'running'",
+                [],
+                |row| row.get(0),
+            )?;
+            if running > 0 {
+                return Err(StorageError::DiscoveryAlreadyRunning);
+            }
+            connection.execute(
+                "INSERT INTO discovery_runs(id, algorithm_version, status, started_at, finished_at,
+                    input_event_count, sessions_upserted, candidates_evaluated, suggestions_created, failure_code)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, 0, 0, 0, NULL)",
+                params![run.id.to_string(), run.algorithm_version, discovery_status_name(run.status), format_ts(run.started_at)?, run.input_event_count],
+            )?;
+            Ok(StorageResponse::Unit)
+        }
+        Operation::AbortRunningDiscoveryRuns => {
+            let now = format_ts(OffsetDateTime::now_utc())?;
+            connection.execute(
+                "UPDATE discovery_runs SET status = 'aborted', finished_at = ?1, failure_code = 'daemon_restarted' WHERE status = 'running'",
+                params![now],
+            )?;
+            Ok(StorageResponse::Unit)
+        }
+        Operation::PersistDiscovery { run, sessions, suggestions } => {
+            let transaction = connection.transaction()?;
+            for session in &sessions {
+                transaction.execute(
+                    "INSERT INTO sessions(id, algorithm_version, kind, workspace_resource_id, anchor_event_id,
+                        started_at, finished_at, event_count, eligible)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     ON CONFLICT(id) DO UPDATE SET finished_at=excluded.finished_at,
+                        event_count=excluded.event_count, eligible=excluded.eligible",
+                    params![session.id.to_string(), session.algorithm_version, session.kind, session.workspace_resource_id.to_string(), session.anchor_event_id.to_string(), format_ts(session.started_at)?, session.finished_at.map(format_ts).transpose()?, session.event_count, i64::from(session.eligible)],
+                )?;
+                transaction.execute("DELETE FROM session_events WHERE session_id = ?1", params![session.id.to_string()])?;
+                for event in &session.events {
+                    transaction.execute(
+                        "INSERT INTO session_events(session_id,event_id,ordinal,received_at,resource_id,is_anchor)
+                         VALUES (?1,?2,?3,?4,?5,?6)",
+                        params![session.id.to_string(), event.event_id.to_string(), event.ordinal, format_ts(event.received_at)?, event.resource_id.to_string(), i64::from(event.is_anchor)],
+                    )?;
+                }
+            }
+            let now = OffsetDateTime::now_utc();
+            for suggestion in &suggestions {
+                let existing: Option<(String, String, Option<String>, Option<String>)> = transaction.query_row(
+                    "SELECT id, status, snoozed_until, accepted_ritual_id FROM suggestions WHERE pattern_fingerprint = ?1",
+                    params![suggestion.pattern_fingerprint],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                ).optional()?;
+                let status = existing.as_ref().map(|(_, status, _, _)| status.as_str()).unwrap_or("pending");
+                transaction.execute(
+                    "INSERT INTO suggestions(id, algorithm_version, workspace_resource_id, pattern_fingerprint,
+                        support_sessions, eligible_sessions, confidence_basis_points, first_seen_at, last_seen_at,
+                        observation_span_seconds, median_completion_ms, created_at, updated_at, status, snoozed_until, accepted_ritual_id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12,?13,NULL,NULL)
+                     ON CONFLICT(pattern_fingerprint) DO UPDATE SET support_sessions=excluded.support_sessions,
+                        eligible_sessions=excluded.eligible_sessions, confidence_basis_points=excluded.confidence_basis_points,
+                        last_seen_at=excluded.last_seen_at, observation_span_seconds=excluded.observation_span_seconds,
+                        median_completion_ms=excluded.median_completion_ms, updated_at=excluded.updated_at",
+                    params![suggestion.id.to_string(), suggestion.algorithm_version, suggestion.workspace_resource_id.to_string(), suggestion.pattern_fingerprint, suggestion.support_sessions, suggestion.eligible_sessions, suggestion.confidence_basis_points, format_ts(suggestion.first_seen_at)?, format_ts(suggestion.last_seen_at)?, suggestion.observation_span_seconds, suggestion.median_completion_ms, format_ts(now)?, status],
+                )?;
+                transaction.execute("DELETE FROM suggestion_actions WHERE suggestion_id = ?1", params![suggestion.id.to_string()])?;
+                for (ordinal, resource_id) in suggestion.action_resource_ids.iter().enumerate() {
+                    transaction.execute("INSERT INTO suggestion_actions(suggestion_id,ordinal,resource_id) VALUES (?1,?2,?3)", params![suggestion.id.to_string(), ordinal as u32, resource_id.to_string()])?;
+                }
+                transaction.execute("DELETE FROM suggestion_support_sessions WHERE suggestion_id = ?1", params![suggestion.id.to_string()])?;
+                for session_id in &suggestion.supporting_session_ids {
+                    transaction.execute("INSERT INTO suggestion_support_sessions(suggestion_id,session_id) VALUES (?1,?2)", params![suggestion.id.to_string(), session_id.to_string()])?;
+                }
+            }
+            let finished = OffsetDateTime::now_utc();
+            transaction.execute(
+                "UPDATE discovery_runs SET status='succeeded', finished_at=?1, input_event_count=?2,
+                    sessions_upserted=?3, candidates_evaluated=?4, suggestions_created=?5
+                 WHERE id=?6",
+                params![format_ts(finished)?, run.input_event_count, sessions.len(), run.candidates_evaluated, suggestions.len(), run.id.to_string()],
+            )?;
+            transaction.commit()?;
+            let mut completed = run;
+            completed.status = DiscoveryRunStatus::Succeeded;
+            completed.finished_at = Some(finished);
+            completed.sessions_upserted = sessions.len() as u32;
+            completed.suggestions_created = suggestions.len() as u32;
+            Ok(StorageResponse::DiscoveryRun(completed))
+        }
+        Operation::ListDiscoveryRuns => Ok(StorageResponse::DiscoveryRuns(list_discovery_runs(connection)?)),
+        Operation::ListSessions(workspace) => Ok(StorageResponse::Sessions(list_sessions(connection, workspace)?)),
+        Operation::GetSession(id) => Ok(StorageResponse::Session(get_session(connection, id)?)),
+        Operation::ListSuggestions { status, workspace_resource_id } => Ok(StorageResponse::Suggestions(list_suggestions(connection, status, workspace_resource_id)?)),
+        Operation::GetSuggestion(id) => Ok(StorageResponse::Suggestion(get_suggestion(connection, id)?)),
+        Operation::SetSuggestionStatus { suggestion_id, status, until } => {
+            let existing = get_suggestion(connection, suggestion_id)?;
+            let current = existing.1;
+            if current == SuggestionStatus::Accepted || current == SuggestionStatus::Blocked {
+                return Err(StorageError::SuggestionInvalidState);
+            }
+            if current == SuggestionStatus::Snoozed && status == SuggestionStatus::Pending {
+                // expiry reconciliation is intentionally allowed.
+            } else if !valid_suggestion_transition(current, status) {
+                return Err(StorageError::SuggestionInvalidState);
+            }
+            connection.execute("UPDATE suggestions SET status=?1, snoozed_until=?2, updated_at=?3 WHERE id=?4", params![suggestion_status_name(status), until.map(format_ts).transpose()?, format_ts(OffsetDateTime::now_utc())?, suggestion_id.to_string()])?;
+            Ok(StorageResponse::Suggestion(get_suggestion(connection, suggestion_id)?))
+        }
+        Operation::AcceptSuggestion { suggestion_id, name: _, ritual, version, definition } => {
+            let transaction = connection.transaction()?;
+            let (suggestion, status, _, accepted) = get_suggestion_tx(&transaction, suggestion_id)?;
+            if status == SuggestionStatus::Accepted {
+                let ritual_id = accepted.ok_or_else(|| StorageError::InvalidData("accepted suggestion lacks ritual".to_owned()))?;
+                let (ritual, version, definition) = get_ritual_tx(&transaction, ritual_id)?;
+                transaction.commit()?;
+                return Ok(StorageResponse::RitualRecord { ritual, version, definition });
+            }
+            if status == SuggestionStatus::Blocked || status == SuggestionStatus::Dismissed {
+                return Err(StorageError::SuggestionInvalidState);
+            }
+            let workspace = get_resource_tx(&transaction, suggestion.workspace_resource_id)?;
+            if workspace.kind != ResourceKind::Directory || !scope_active_tx(&transaction, workspace.id, ObservationSource::VscodeWorkspace)? {
+                return Err(StorageError::SuggestionStale);
+            }
+            for resource_id in &suggestion.action_resource_ids {
+                let resource = get_resource_tx(&transaction, *resource_id)?;
+                if resource.kind != ResourceKind::WebPage || !scope_active_tx(&transaction, *resource_id, ObservationSource::BrowserChromium)? {
+                    return Err(StorageError::SuggestionStale);
+                }
+            }
+            insert_ritual_tx(&transaction, &ritual, &version)?;
+            transaction.execute("UPDATE suggestions SET status='accepted', accepted_ritual_id=?1, updated_at=?2 WHERE id=?3", params![ritual.id.to_string(), format_ts(OffsetDateTime::now_utc())?, suggestion_id.to_string()])?;
+            transaction.commit()?;
+            Ok(StorageResponse::RitualRecord { ritual, version, definition })
+        }
     }
+}
+
+fn discovery_status_name(status: DiscoveryRunStatus) -> &'static str {
+    match status {
+        DiscoveryRunStatus::Running => "running",
+        DiscoveryRunStatus::Succeeded => "succeeded",
+        DiscoveryRunStatus::Failed => "failed",
+        DiscoveryRunStatus::Aborted => "aborted",
+    }
+}
+
+fn parse_discovery_status(value: &str) -> Result<DiscoveryRunStatus, StorageError> {
+    match value {
+        "running" => Ok(DiscoveryRunStatus::Running),
+        "succeeded" => Ok(DiscoveryRunStatus::Succeeded),
+        "failed" => Ok(DiscoveryRunStatus::Failed),
+        "aborted" => Ok(DiscoveryRunStatus::Aborted),
+        _ => Err(StorageError::InvalidData("invalid discovery status".to_owned())),
+    }
+}
+
+fn suggestion_status_name(status: SuggestionStatus) -> &'static str {
+    match status {
+        SuggestionStatus::Pending => "pending",
+        SuggestionStatus::Snoozed => "snoozed",
+        SuggestionStatus::Dismissed => "dismissed",
+        SuggestionStatus::Accepted => "accepted",
+        SuggestionStatus::Blocked => "blocked",
+    }
+}
+
+fn parse_suggestion_status(value: &str) -> Result<SuggestionStatus, StorageError> {
+    match value {
+        "pending" => Ok(SuggestionStatus::Pending),
+        "snoozed" => Ok(SuggestionStatus::Snoozed),
+        "dismissed" => Ok(SuggestionStatus::Dismissed),
+        "accepted" => Ok(SuggestionStatus::Accepted),
+        "blocked" => Ok(SuggestionStatus::Blocked),
+        _ => Err(StorageError::InvalidData("invalid suggestion status".to_owned())),
+    }
+}
+
+fn valid_suggestion_transition(from: SuggestionStatus, to: SuggestionStatus) -> bool {
+    matches!(
+        (from, to),
+        (SuggestionStatus::Pending, SuggestionStatus::Snoozed)
+            | (SuggestionStatus::Pending, SuggestionStatus::Dismissed)
+            | (SuggestionStatus::Pending, SuggestionStatus::Accepted)
+            | (SuggestionStatus::Pending, SuggestionStatus::Blocked)
+            | (SuggestionStatus::Snoozed, SuggestionStatus::Accepted)
+            | (SuggestionStatus::Snoozed, SuggestionStatus::Dismissed)
+            | (SuggestionStatus::Snoozed, SuggestionStatus::Blocked)
+    )
+}
+
+fn list_discovery_runs(connection: &Connection) -> Result<Vec<DiscoveryRun>, StorageError> {
+    let mut statement = connection.prepare("SELECT id, algorithm_version, status, started_at, finished_at, input_event_count, sessions_upserted, candidates_evaluated, suggestions_created, failure_code FROM discovery_runs ORDER BY started_at DESC, id ASC")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, u32>(5)?, row.get::<_, u32>(6)?, row.get::<_, u32>(7)?, row.get::<_, u32>(8)?, row.get::<_, Option<String>>(9)?))
+    })?;
+    rows.map(|row| row.map_err(StorageError::from).and_then(discovery_run_from_row)).collect()
+}
+
+fn discovery_run_from_row(row: (String,String,String,String,Option<String>,u32,u32,u32,u32,Option<String>)) -> Result<DiscoveryRun, StorageError> {
+    Ok(DiscoveryRun { id: parse_uuid(&row.0)?, algorithm_version: row.1, status: parse_discovery_status(&row.2)?, started_at: parse_ts(&row.3)?, finished_at: row.4.as_deref().map(parse_ts).transpose()?, input_event_count: row.5, sessions_upserted: row.6, candidates_evaluated: row.7, suggestions_created: row.8, failure_code: row.9 })
+}
+
+fn session_from_connection(connection: &Connection, row: (String,String,String,String,String,String,Option<String>,u32,bool)) -> Result<DiscoveredSession, StorageError> {
+    let id = parse_uuid(&row.0)?;
+    let mut statement = connection.prepare("SELECT event_id, resource_id, ordinal, received_at, is_anchor FROM session_events WHERE session_id=?1 ORDER BY ordinal ASC")?;
+    let events = statement.query_map(params![row.0.clone()], |event| Ok((event.get::<_,String>(0)?,event.get::<_,String>(1)?,event.get::<_,u32>(2)?,event.get::<_,String>(3)?,event.get::<_,i64>(4)?)))?.map(|event| event.map_err(StorageError::from).and_then(|value| Ok(SessionEvent { event_id: parse_uuid(&value.0)?, resource_id: parse_uuid(&value.1)?, ordinal: value.2, received_at: parse_ts(&value.3)?, is_anchor: value.4 != 0 }))).collect::<Result<Vec<_>, StorageError>>()?;
+    Ok(DiscoveredSession { id, algorithm_version: row.1, kind: row.2, workspace_resource_id: parse_uuid(&row.3)?, anchor_event_id: parse_uuid(&row.4)?, started_at: parse_ts(&row.5)?, finished_at: row.6.as_deref().map(parse_ts).transpose()?, event_count: row.7, eligible: row.8, events })
+}
+
+fn list_sessions(connection: &Connection, workspace: Option<Uuid>) -> Result<Vec<DiscoveredSession>, StorageError> {
+    let mut statement = connection.prepare("SELECT id, algorithm_version, kind, workspace_resource_id, anchor_event_id, started_at, finished_at, event_count, eligible FROM sessions WHERE (?1 IS NULL OR workspace_resource_id=?1) ORDER BY started_at ASC, id ASC")?;
+    let rows = statement.query_map(params![workspace.map(|id| id.to_string())], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get::<_,i64>(8)? != 0)))?;
+    let records = rows.map(|row| row.map_err(StorageError::from).and_then(|value| session_from_connection(connection, value))).collect::<Result<Vec<_>, StorageError>>()?;
+    Ok(records)
+}
+
+fn get_session(connection: &Connection, id: Uuid) -> Result<DiscoveredSession, StorageError> {
+    let row = connection.query_row("SELECT id, algorithm_version, kind, workspace_resource_id, anchor_event_id, started_at, finished_at, event_count, eligible FROM sessions WHERE id=?1", params![id.to_string()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get::<_,i64>(8)? != 0))).optional()?.ok_or(StorageError::SessionNotFound)?;
+    session_from_connection(connection, row)
+}
+
+fn suggestion_row(connection: &Connection, id: Uuid) -> Result<(String,String,String,String,u32,u32,u32,String,String,i64,i64,String,String,String,Option<String>,Option<String>), StorageError> {
+    connection.query_row("SELECT id, algorithm_version, workspace_resource_id, pattern_fingerprint, support_sessions, eligible_sessions, confidence_basis_points, first_seen_at, last_seen_at, observation_span_seconds, median_completion_ms, created_at, updated_at, status, snoozed_until, accepted_ritual_id FROM suggestions WHERE id=?1", params![id.to_string()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?,row.get(12)?,row.get(13)?,row.get(14)?,row.get(15)?))).optional()?.ok_or(StorageError::SuggestionNotFound)
+}
+
+fn get_suggestion(connection: &Connection, id: Uuid) -> Result<(DiscoveredSuggestion,SuggestionStatus,Option<OffsetDateTime>,Option<Uuid>), StorageError> {
+    let row = suggestion_row(connection, id)?;
+    let mut actions_statement = connection.prepare("SELECT resource_id FROM suggestion_actions WHERE suggestion_id=?1 ORDER BY ordinal ASC")?;
+    let actions = actions_statement.query_map(params![id.to_string()], |action| action.get::<_,String>(0))?.map(|item| item.map_err(StorageError::from).and_then(|value| parse_uuid(&value))).collect::<Result<Vec<_>,StorageError>>()?;
+    let mut supports_statement = connection.prepare("SELECT session_id FROM suggestion_support_sessions WHERE suggestion_id=?1 ORDER BY session_id ASC")?;
+    let supports = supports_statement.query_map(params![id.to_string()], |support| support.get::<_,String>(0))?.map(|item| item.map_err(StorageError::from).and_then(|value| parse_uuid(&value))).collect::<Result<Vec<_>,StorageError>>()?;
+    let status = parse_suggestion_status(&row.13)?;
+    Ok((DiscoveredSuggestion { id: parse_uuid(&row.0)?, algorithm_version: row.1, workspace_resource_id: parse_uuid(&row.2)?, pattern_fingerprint: row.3, action_resource_ids: actions, supporting_session_ids: supports, support_sessions: row.4, eligible_sessions: row.5, confidence_basis_points: row.6, first_seen_at: parse_ts(&row.7)?, last_seen_at: parse_ts(&row.8)?, observation_span_seconds: row.9, median_completion_ms: row.10 }, status, row.14.as_deref().map(parse_ts).transpose()?, row.15.as_deref().map(parse_uuid).transpose()?))
+}
+
+fn list_suggestions(connection: &Connection, status: Option<SuggestionStatus>, workspace: Option<Uuid>) -> Result<Vec<DiscoveredSuggestion>, StorageError> {
+    let now = format_ts(OffsetDateTime::now_utc())?;
+    connection.execute("UPDATE suggestions SET status='pending', snoozed_until=NULL WHERE status IN ('snoozed','dismissed') AND snoozed_until IS NOT NULL AND snoozed_until <= ?1", params![now])?;
+    let mut statement = connection.prepare("SELECT id FROM suggestions WHERE (?1 IS NULL OR status=?1) AND (?2 IS NULL OR workspace_resource_id=?2) ORDER BY updated_at DESC, id ASC")?;
+    let rows = statement.query_map(params![status.map(suggestion_status_name), workspace.map(|id| id.to_string())], |row| row.get::<_,String>(0))?;
+    rows.map(|row| row.map_err(StorageError::from).and_then(|id| get_suggestion(connection, parse_uuid(&id)?).map(|value| value.0))).collect()
+}
+
+fn get_suggestion_tx(transaction: &rusqlite::Transaction<'_>, id: Uuid) -> Result<(DiscoveredSuggestion,SuggestionStatus,Option<OffsetDateTime>,Option<Uuid>), StorageError> {
+    get_suggestion(transaction, id)
+}
+
+fn get_ritual_tx(transaction: &rusqlite::Transaction<'_>, id: Uuid) -> Result<(Ritual, RitualVersion, RitualDefinition), StorageError> {
+    get_ritual(transaction, id)
+}
+
+fn get_resource_tx(transaction: &rusqlite::Transaction<'_>, id: Uuid) -> Result<Resource, StorageError> {
+    get_resource(transaction, id)
+}
+
+fn scope_active_tx(transaction: &rusqlite::Transaction<'_>, id: Uuid, source: ObservationSource) -> Result<bool, StorageError> {
+    Ok(transaction.query_row("SELECT EXISTS(SELECT 1 FROM observation_scopes WHERE resource_id=?1 AND source=?2 AND status='active')", params![id.to_string(), observation_source_name(source)], |row| row.get::<_,i64>(0))? != 0)
+}
+
+fn insert_ritual_tx(transaction: &rusqlite::Transaction<'_>, ritual: &Ritual, version: &RitualVersion) -> Result<(), StorageError> {
+    transaction.execute("INSERT INTO rituals(id,name,status,current_version_id,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6)", params![ritual.id.to_string(), ritual.name, ritual_status_name(ritual.status), version.id.to_string(), format_ts(ritual.created_at)?, format_ts(ritual.updated_at)?])?;
+    insert_ritual_version(transaction, version)
 }
 
 fn list_resources(connection: &Connection) -> Result<Vec<Resource>, StorageError> {
@@ -1863,7 +2345,7 @@ fn list_events(
          ORDER BY received_at ASC, id ASC
          LIMIT ?2",
     )?;
-    let rows = statement.query_map(params![since, i64::from(limit.min(1000))], |row| {
+    let rows = statement.query_map(params![since, i64::from(limit.min(100_001))], |row| {
         row.get::<_, String>(0)
     })?;
     let serialized = rows.collect::<Result<Vec<_>, _>>()?;

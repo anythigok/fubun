@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 fubun-domain.workspace = true
+fubun-mining.workspace = true
 fubun-policy.workspace = true
 fubun-protocol.workspace = true
 fubun-storage.workspace = true

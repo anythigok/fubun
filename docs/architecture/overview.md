@@ -9,7 +9,7 @@ fubun-cli / fubun-linux-adapter / fubun-native-host / VS Code Extension
   -> strict versioned Envelope + client.hello / adapter.hello
   -> Ritual validation / Preview / Approval / Execution plan
   -> single writer queue
-  -> SQLite (WAL, v4 migration)
+  -> SQLite (WAL, v5 migration)
 ```
 
 `fubun-domain` はEvent、Ritual、Resource、Observation Scope、Execution型、URL canonicalizationを所有します。`fubun-policy` は固定Action Registry、`fubun-protocol` はtransport framingと双方向envelope、`fubun-storage` はv4 migrationとsingle writer、`fubun-core` はScope検証、Preview・Approval・Execution orchestration、Core-built Eventを所有します。Linux固有Commandは `fubun-linux-adapter` だけが固定引数配列で呼び出します。BrowserのOS境界は `fubun-native-host`、Browser APIはManifest V3 Extension、VS Code APIはUI Extensionだけが担当します。CLIは全てdaemonを通り、databaseを直接読みません。
@@ -23,6 +23,20 @@ CoreとAdapterは長時間の双方向Unix socket接続を使います。Action�
 Previewと実行直前Preflightは、同じ単一Adapterのrequired executable、Desktop Entry、Resourceのcanonical pathとfile/directory種別を確認します。Executionがsucceeded、failed、partial、abortedのいずれかへ終端すると、すべてのStepも終端状態になります。未実行の後続Stepは `stopped_after_failure` でabortedにします。Production Linux Adapterは固定Executableだけを使用し、Fake実行経路を持ちません。
 
 外部network client、TCP listener、Pattern Miner、Rule、自動Trigger、GUIはありません。
+
+## Phase 4A Discovery
+
+`fubun-mining`はStorageやTokioを依存しない純粋Libraryです。Coreが30日以内の
+Semantic Event、Resource、Observation Scopeを読み出して入力し、Libraryが
+`workspace-browser-start/v1`のSession、ordered Prefix、Fingerprint、Evidenceを返します。
+順序は`received_at`、同時刻はEvent IDで決定します。Workspace Anchorから10分以内の
+Browser ResourceだけをCandidateへ使い、2〜5件、support 3以上、7000 basis points以上、
+18時間span以上の条件をすべて満たした最長PrefixをWorkspaceごとに一つ選びます。
+
+Discovery Run、Session、Session Event、Suggestion Evidence、Ordered Actions、Supporting
+Sessionsはv5 Migrationで保存されます。Suggestion Acceptは一つのStorage transactionで
+Resource／Scopeを再検証し、未承認・DraftのBrowser Ritualだけを生成します。Scheduler、AI、
+Generic Pattern Miner、Automatic Ruleはこの層に存在しません。
 
 ## Observation ScopeとSemantic Event
 

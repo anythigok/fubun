@@ -4,11 +4,12 @@ import {
   isUuid,
   rejectUnknownKeys,
 } from "@fubun/protocol-ts";
-import { BrowserIntegration, BrowserTab, MappingStore } from "./integration.js";
+import { BrowserIntegration, BrowserTab, MappingStore, SelfGeneratedSuppressionStore } from "./integration.js";
 import { BrowserNativeBridge, NativePort } from "./native-bridge.js";
 
 const HOST = "dev.fubun.browser";
 const mappingsKey = "browser_mappings";
+const suppressionKey = "self_generated_tabs";
 
 const store: MappingStore = {
   async read(): Promise<BrowserResourceMapping[]> {
@@ -18,6 +19,24 @@ const store: MappingStore = {
   },
   async write(mappings: BrowserResourceMapping[]): Promise<void> {
     await chrome.storage.local.set({ [mappingsKey]: mappings });
+  },
+};
+
+const suppression: SelfGeneratedSuppressionStore = {
+  async mark(tabId, resourceId, expiresAt): Promise<void> {
+    const value = await chrome.storage.session.get(suppressionKey);
+    const current = isSuppressionMap(value[suppressionKey]) ? value[suppressionKey] : {};
+    current[String(tabId)] = { resource_id: resourceId, expires_at: expiresAt };
+    await chrome.storage.session.set({ [suppressionKey]: current });
+  },
+  async consume(tabId, resourceId, now): Promise<boolean> {
+    const value = await chrome.storage.session.get(suppressionKey);
+    const current = isSuppressionMap(value[suppressionKey]) ? value[suppressionKey] : {};
+    const candidate = current[String(tabId)];
+    if (candidate === undefined) return false;
+    delete current[String(tabId)];
+    await chrome.storage.session.set({ [suppressionKey]: current });
+    return candidate.resource_id === resourceId && candidate.expires_at >= now;
   },
 };
 
@@ -39,8 +58,9 @@ integration = new BrowserIntegration({
         .map(tabFromChrome)
         .filter((tab): tab is BrowserTab => tab !== undefined);
     },
-    async createTab(url: string): Promise<void> {
-      await chrome.tabs.create({ url, active: true });
+    async createTab(url: string): Promise<number | undefined> {
+      const tab = await chrome.tabs.create({ url, active: true });
+      return tab.id;
     },
     async permissionGranted(origin: string): Promise<boolean> {
       return chrome.permissions.contains({ origins: [origin] });
@@ -50,6 +70,7 @@ integration = new BrowserIntegration({
   native: bridge,
   extensionId: () => chrome.runtime.id,
   extensionVersion: () => chrome.runtime.getManifest().version,
+  suppression,
 });
 
 function createNativePort(): NativePort {
@@ -99,6 +120,16 @@ function isStoredMapping(value: unknown): value is BrowserResourceMapping {
     && typeof record.origin_pattern === "string"
     && typeof record.label === "string"
     && (record.state === undefined || record.state === "active" || record.state === "inactive" || record.state === "pause_pending");
+}
+
+type SuppressionEntry = { resource_id: string; expires_at: number };
+function isSuppressionMap(value: unknown): value is Record<string, SuppressionEntry> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+    const record = entry as Record<string, unknown>;
+    return isUuid(record.resource_id) && typeof record.expires_at === "number";
+  });
 }
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {

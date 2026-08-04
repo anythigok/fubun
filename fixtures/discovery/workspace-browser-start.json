@@ -1,0 +1,9 @@
+{
+  "algorithm_version": "workspace-browser-start/v1",
+  "kind": "workspace_start",
+  "workspace_resource_id": "REPLACE_WITH_WORKSPACE_RESOURCE_ID",
+  "action_resource_ids": [
+    "REPLACE_WITH_BROWSER_RESOURCE_ID_A",
+    "REPLACE_WITH_BROWSER_RESOURCE_ID_B"
+  ]
+}

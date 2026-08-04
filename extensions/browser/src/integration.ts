@@ -19,8 +19,13 @@ export interface BrowserTab {
 export interface BrowserApi {
   activeTab(): Promise<BrowserTab | undefined>;
   allTabs(): Promise<BrowserTab[]>;
-  createTab(url: string): Promise<void>;
+  createTab(url: string): Promise<number | undefined>;
   permissionGranted(origin: string): Promise<boolean>;
+}
+
+export interface SelfGeneratedSuppressionStore {
+  mark(tabId: number, resourceId: string, expiresAt: number): Promise<void>;
+  consume(tabId: number, resourceId: string, now: number): Promise<boolean>;
 }
 
 export interface MappingStore {
@@ -45,6 +50,7 @@ export interface BrowserIntegrationOptions {
   extensionVersion: () => string;
   uuid?: () => string;
   now?: () => number;
+  suppression?: SelfGeneratedSuppressionStore;
 }
 
 type MappingState = "active" | "inactive" | "pause_pending";
@@ -212,6 +218,8 @@ export class BrowserIntegration {
     const hash = await canonicalUrlHash(canonical);
     const mapping = (await this.mappings()).find((candidate) => candidate.canonical_url_hash === hash && this.isActive(candidate));
     if (mapping === undefined) return;
+    if (this.options.suppression !== undefined && typeof tab.id === "number"
+      && await this.options.suppression.consume(tab.id, mapping.resource_id, this.now())) return;
     if (!await this.options.browser.permissionGranted(mapping.origin_pattern)) {
       await this.onPermissionsRemoved([mapping.origin_pattern]);
       return;
@@ -259,7 +267,7 @@ export class BrowserIntegration {
         if (hash !== mapping.canonical_url_hash) {
           result = failure("resource_identity_mismatch", "resolved browser resource did not match the registered resource");
         } else {
-          result = await this.ensureTabOpen(canonical, hash);
+          result = await this.ensureTabOpen(canonical, hash, mapping.resource_id);
         }
       }
     } catch (error) {
@@ -275,7 +283,7 @@ export class BrowserIntegration {
     });
   }
 
-  private async ensureTabOpen(canonical: string, expectedHash: string): Promise<{ status: "succeeded" | "skipped" | "failed"; result_code: string; redacted_message: string }> {
+  private async ensureTabOpen(canonical: string, expectedHash: string, resourceId: string): Promise<{ status: "succeeded" | "skipped" | "failed"; result_code: string; redacted_message: string }> {
     for (const tab of await this.options.browser.allTabs()) {
       if (typeof tab.url !== "string") continue;
       try {
@@ -286,7 +294,10 @@ export class BrowserIntegration {
         // Unsupported tab URLs are never emitted or persisted.
       }
     }
-    await this.options.browser.createTab(canonical);
+    const tabId = await this.options.browser.createTab(canonical);
+    if (tabId !== undefined && this.options.suppression !== undefined) {
+      await this.options.suppression.mark(tabId, resourceId, this.now() + 60_000);
+    }
     return { status: "succeeded", result_code: "opened", redacted_message: "registered page opened" };
   }
 

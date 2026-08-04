@@ -6,6 +6,7 @@ use fubun_domain::{
     ActionSpec, Event, EventType, Execution, ExecutionStep, ObservationScope, ObservationSource,
     Resource, ResourceKind, Ritual, RitualDefinition, RitualVersion, Sensitivity,
 };
+use fubun_mining::{DiscoveryRun, DiscoveredSession, DiscoveredSuggestion, SuggestionStatus};
 use schemars::JsonSchema;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
@@ -136,6 +137,72 @@ pub struct ObservationPauseRequest {
 pub struct ObservationListRequest {
     #[serde(default)]
     pub source: Option<ObservationSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionsListRequest {
+    #[serde(default)]
+    pub workspace_resource_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionsListRequest {
+    #[serde(default)]
+    pub status: Option<SuggestionStatus>,
+    #[serde(default)]
+    pub workspace_resource_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionSnoozeRequest {
+    pub suggestion_id: Uuid,
+    pub for_duration: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionAcceptRequest {
+    pub suggestion_id: Uuid,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryRunReport {
+    pub run: DiscoveryRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionsList {
+    pub sessions: Vec<DiscoveredSession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionShow {
+    pub session: DiscoveredSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionsList {
+    pub suggestions: Vec<DiscoveredSuggestion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestionShow {
+    pub suggestion: DiscoveredSuggestion,
+    pub status: SuggestionStatus,
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
+    #[serde(default)]
+    pub accepted_ritual_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -346,6 +413,26 @@ pub enum RequestBody {
     ExecutionShow(ExecutionIdRequest),
     #[serde(rename = "integrations.status")]
     IntegrationsStatus(EmptyRequest),
+    #[serde(rename = "discovery.run")]
+    DiscoveryRun(EmptyRequest),
+    #[serde(rename = "discovery.status")]
+    DiscoveryStatus(EmptyRequest),
+    #[serde(rename = "sessions.list")]
+    SessionsList(SessionsListRequest),
+    #[serde(rename = "session.show")]
+    SessionShow(RitualIdRequest),
+    #[serde(rename = "suggestions.list")]
+    SuggestionsList(SuggestionsListRequest),
+    #[serde(rename = "suggestion.show")]
+    SuggestionShow(RitualIdRequest),
+    #[serde(rename = "suggestion.snooze")]
+    SuggestionSnooze(SuggestionSnoozeRequest),
+    #[serde(rename = "suggestion.dismiss")]
+    SuggestionDismiss(RitualIdRequest),
+    #[serde(rename = "suggestion.block")]
+    SuggestionBlock(RitualIdRequest),
+    #[serde(rename = "suggestion.accept")]
+    SuggestionAccept(SuggestionAcceptRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -554,6 +641,26 @@ pub enum ResponsePayload {
     ObservationList(ObservationList),
     #[serde(rename = "integrations.status")]
     IntegrationsStatus(IntegrationReport),
+    #[serde(rename = "discovery.run")]
+    DiscoveryRun(DiscoveryRunReport),
+    #[serde(rename = "discovery.status")]
+    DiscoveryStatus(DiscoveryRunReport),
+    #[serde(rename = "sessions.list")]
+    SessionsList(SessionsList),
+    #[serde(rename = "session.show")]
+    SessionShow(SessionShow),
+    #[serde(rename = "suggestions.list")]
+    SuggestionsList(SuggestionsList),
+    #[serde(rename = "suggestion.show")]
+    SuggestionShow(SuggestionShow),
+    #[serde(rename = "suggestion.snooze")]
+    SuggestionSnoozed(SuggestionShow),
+    #[serde(rename = "suggestion.dismiss")]
+    SuggestionDismissed(SuggestionShow),
+    #[serde(rename = "suggestion.block")]
+    SuggestionBlocked(SuggestionShow),
+    #[serde(rename = "suggestion.accept")]
+    SuggestionAccepted(RitualRecord),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

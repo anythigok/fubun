@@ -28,6 +28,20 @@
 - [x] Unit, property, and integration coverage
 - [x] GitHub mainへPhase 1 root commitを初期公開
 
+## Phase 4A: explainable workspace discovery
+
+- [x] `workspace-browser-start/v1` の純粋Sessionizer／Prefix候補生成
+- [x] received_at順、10分Startup Window、2〜5 Action、固定Threshold
+- [x] SQLite v5（Discovery Run、Session、Evidence、Suggestion）
+- [x] Discovery／Session／SuggestionのStrict IPCとDaemon経由CLI
+- [x] Snooze、Dismiss、Block、冪等なSuggestion Accept（Draft Ritualのみ）
+- [x] Browser Actionで生成したTabの60秒Ephemeral Suppression
+- [x] Phase 4AのSecurity境界と非目標を文書化
+
+合理的仮定: Lookbackは30日、Input上限は100,000件、DiscoveryはCLI／IPC要求時だけ
+実行し、期限切れの抑止状態はListまたはRunで再調整する。Scheduler、AI、汎用系列
+マイニングは追加しない。
+
 ## Phase 2: explicit ritual manual execution
 
 - [x] Resource、Ritual、Immutable RitualVersion、Approval、Execution domain

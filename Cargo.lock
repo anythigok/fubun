@@ -299,6 +299,7 @@ dependencies = [
  "clap",
  "fubun-core",
  "fubun-domain",
+ "fubun-mining",
  "fubun-protocol",
  "serde_json",
  "thiserror",
@@ -312,6 +313,7 @@ name = "fubun-core"
 version = "0.1.0"
 dependencies = [
  "fubun-domain",
+ "fubun-mining",
  "fubun-policy",
  "fubun-protocol",
  "fubun-storage",
@@ -364,6 +366,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fubun-mining"
+version = "0.1.0"
+dependencies = [
+ "fubun-domain",
+ "proptest",
+ "schemars",
+ "serde",
+ "sha2",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "fubun-native-host"
 version = "0.1.0"
 dependencies = [
@@ -394,6 +409,7 @@ name = "fubun-protocol"
 version = "0.1.0"
 dependencies = [
  "fubun-domain",
+ "fubun-mining",
  "proptest",
  "schemars",
  "serde",
@@ -409,6 +425,7 @@ name = "fubun-storage"
 version = "0.1.0"
 dependencies = [
  "fubun-domain",
+ "fubun-mining",
  "rusqlite",
  "serde_json",
  "tempfile",

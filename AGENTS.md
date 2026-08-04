@@ -33,3 +33,10 @@
 - VS Code Event-only Adapterは観察中に長時間接続を再利用し、Hello/Event Ack/Protocol Versionを厳格検証する。
 - VS Codeから本文、現在ファイル名、Terminal、Git差分、Workspace Settingsを取得しない。Remote、Multi-root、Virtual Workspaceは非対応とする。
 - Phase 3ではPattern Miner、Suggestion、Rule、Automatic Triggerを追加しない。
+- Phase 4AのMiningは`workspace-browser-start/v1`だけで、actor=userのAnchorとActionだけを扱う。
+- received_atをSession順序の正本とし、Synthetic、Fubun自身のTab、非Active ScopeをMiningしない。
+- Prefix Candidateは2〜5件、support 3以上、confidence 7000以上、18時間span以上に限定する。
+- FingerprintはVersionとResource IDだけから生成し、Raw URL／PathをEvidenceへ保存しない。
+- Suggestion AcceptはApprovalなしのDraft Ritualだけを作り、Rule・Scheduler・自動実行へ変換しない。
+- Discovery RunはCLI／IPC要求時だけ実行し、Single Flightと30日／100000件上限を維持する。
+- Fubun生成Browser TabはEphemeralな最大60秒Suppress状態で一度だけ除外し、Tab IDを永続化しない。

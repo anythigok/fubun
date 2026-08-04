@@ -26,6 +26,33 @@ Phase 2は、ユーザーが明示的に作成したRitualをPreview、Approval�
 - VS Code連携はLocal、file scheme、single-folder workspaceだけを対象にし、本文、ファイル名、Terminal、Git差分を取得しない。
 - data directoryは0700、databaseとsocketは0600。
 
+## Phase 4A Discovery
+
+Phase 4Aは、明示的に観察中のVS Code WorkspaceをAnchorに、開始から10分以内に
+開かれたBrowser Resourceの安定したPrefixだけを決定論的に候補化します。対象は
+`workspace-browser-start/v1`一種類で、Generic n-gram、AI、Scheduler、Rule、自動実行は
+ありません。Raw URL、Workspace Path、本文、Title、Query、FragmentはSession／Evidenceへ
+保存せず、Resource IDとラベルだけで説明します。
+
+```text
+fubun discovery run
+fubun discovery status
+fubun sessions list
+fubun session show <session-id>
+fubun suggestions list --status pending
+fubun suggestion show <suggestion-id>
+fubun suggestion snooze <suggestion-id> --for 14d
+fubun suggestion dismiss <suggestion-id>
+fubun suggestion block <suggestion-id>
+fubun suggestion accept <suggestion-id> --name "Research start"
+```
+
+Acceptは現在のResource／Scopeを再確認し、Browser ActionだけのDraft Ritualを一つ作ります。
+Approval、Activation、Runはユーザーが既存のRitualコマンドで別途行います。同じFingerprintの
+再提案やAcceptによるRitual重複はありません。FubunのBrowser Actionで新規Tabを作成した
+Navigationは、Extensionの`chrome.storage.session`に最大60秒だけ保持するEphemeral情報で
+一度抑止されます。Tab IDはCoreや永続Databaseへ送信されません。
+
 ## 必要環境
 
 - Ubuntu 24.04 LTS（amd64）
