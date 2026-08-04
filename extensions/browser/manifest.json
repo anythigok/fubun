@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Fubun",
+  "version": "0.1.0",
+  "description": "Explicit local workflow observations for Fubun",
+  "permissions": ["nativeMessaging", "storage", "activeTab"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "incognito": "not_allowed",
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "action": { "default_popup": "popup.html" }
+}

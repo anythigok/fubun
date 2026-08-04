@@ -30,3 +30,30 @@ jobs:
           if grep -R -n -E 'TcpListener|127\.0\.0\.1|localhost' --include='*.rs' crates apps; then
             exit 1
           fi
+
+  typescript:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm --filter @fubun/browser-extension package
+      - run: pnpm --filter fubun-vscode-extension package
+      - name: Audit browser permissions and forbidden APIs
+        run: |
+          ! grep -R -n -E '"(tabs|scripting|history|cookies|downloads|webRequest|declarativeNetRequest|clipboardRead|clipboardWrite|management)"' extensions/browser/manifest.json
+          ! grep -R -n -E 'content_scripts|chrome\.scripting|chrome\.cookies|chrome\.history|chrome\.webRequest|child_process|fetch\(' \
+            extensions/browser/src extensions/vscode/src packages/fubun-protocol-ts/src
+      - name: Secret scan
+        run: |
+          ! grep -R -n -E 'AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' --exclude-dir=.git --exclude-dir=.github --exclude-dir=node_modules --exclude='pnpm-lock.yaml' .

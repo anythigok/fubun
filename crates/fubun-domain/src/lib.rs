@@ -9,8 +9,11 @@ use uuid::Uuid;
 
 pub const EVENT_SPEC_VERSION: &str = "1.0";
 pub const SYNTHETIC_EVENT_TYPE: &str = "dev.fubun.dev.synthetic.v1";
+pub const BROWSER_RESOURCE_OPENED_EVENT_TYPE: &str = "dev.fubun.browser.resource.opened.v1";
+pub const VSCODE_WORKSPACE_OPENED_EVENT_TYPE: &str = "dev.fubun.vscode.workspace.opened.v1";
 pub const RITUAL_SCHEMA_VERSION: &str = "dev.fubun.ritual/1";
 pub const MAX_RITUAL_ACTIONS: usize = 16;
+pub const WEB_URL_MAX_BYTES: usize = 2048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -32,6 +35,10 @@ pub enum PrivacyClass {
 pub enum EventType {
     #[serde(rename = "dev.fubun.dev.synthetic.v1")]
     SyntheticV1,
+    #[serde(rename = "dev.fubun.browser.resource.opened.v1")]
+    BrowserResourceOpenedV1,
+    #[serde(rename = "dev.fubun.vscode.workspace.opened.v1")]
+    VscodeWorkspaceOpenedV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -61,6 +68,25 @@ pub struct SyntheticEventData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ResourceEventData {
+    pub resource_id: Uuid,
+}
+
+/// Event payloads are intentionally small and semantic.  Raw URLs, paths,
+/// titles, tab identifiers, and file names are not representable here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind")]
+pub enum EventData {
+    #[serde(rename = "synthetic")]
+    Synthetic { label: String, counter: i64 },
+    #[serde(rename = "browser.resource.opened")]
+    BrowserResourceOpened { resource_id: Uuid },
+    #[serde(rename = "vscode.workspace.opened")]
+    VscodeWorkspaceOpened { resource_id: Uuid },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Event {
     pub spec_version: String,
     pub id: Uuid,
@@ -78,7 +104,7 @@ pub struct Event {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextReference>,
     pub privacy: PrivacyClass,
-    pub data: SyntheticEventData,
+    pub data: EventData,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -91,6 +117,8 @@ pub enum ValidationError {
     SequenceOutOfRange,
     #[error("synthetic event label exceeds 128 bytes")]
     LabelTooLong,
+    #[error("event type and data kind do not match")]
+    TypeDataMismatch,
 }
 
 impl Event {
@@ -103,12 +131,34 @@ impl Event {
         validate_non_empty("source", &self.source)?;
         validate_non_empty("adapter.id", &self.adapter.id)?;
         validate_non_empty("adapter.version", &self.adapter.version)?;
-        validate_non_empty("data.label", &self.data.label)?;
+        if let EventData::Synthetic { label, .. } = &self.data {
+            validate_non_empty("data.label", label)?;
+        }
         if self.adapter.sequence_no > i64::MAX as u64 {
             return Err(ValidationError::SequenceOutOfRange);
         }
-        if self.data.label.len() > 128 {
-            return Err(ValidationError::LabelTooLong);
+        match &self.data {
+            EventData::Synthetic { label, .. } if label.len() > 128 => {
+                return Err(ValidationError::LabelTooLong)
+            }
+            EventData::Synthetic { .. }
+            | EventData::BrowserResourceOpened { .. }
+            | EventData::VscodeWorkspaceOpened { .. } => {}
+        }
+        let type_matches = matches!(
+            (&self.event_type, &self.data),
+            (EventType::SyntheticV1, EventData::Synthetic { .. })
+                | (
+                    EventType::BrowserResourceOpenedV1,
+                    EventData::BrowserResourceOpened { .. }
+                )
+                | (
+                    EventType::VscodeWorkspaceOpenedV1,
+                    EventData::VscodeWorkspaceOpened { .. }
+                )
+        );
+        if !type_matches {
+            return Err(ValidationError::TypeDataMismatch);
         }
         Ok(())
     }
@@ -121,6 +171,8 @@ pub enum ResourceKind {
     File,
     #[serde(rename = "filesystem.directory")]
     Directory,
+    #[serde(rename = "web.page")]
+    WebPage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -166,6 +218,8 @@ pub enum ResourceValidationError {
     LocatorTooLong,
     #[error("resource canonical locator must be an absolute path")]
     InvalidCanonicalPath,
+    #[error("web page locator is not a valid canonical http(s) URL")]
+    InvalidWebUrl,
 }
 
 impl Resource {
@@ -174,16 +228,128 @@ impl Resource {
         if !(1..=128).contains(&label_len) {
             return Err(ResourceValidationError::InvalidLabel);
         }
-        validate_path_string(&self.locator)?;
-        validate_path_string(&self.canonical_locator)?;
-        if !std::path::Path::new(&self.locator).is_absolute() {
-            return Err(ResourceValidationError::RelativePath);
-        }
-        if !std::path::Path::new(&self.canonical_locator).is_absolute() {
-            return Err(ResourceValidationError::InvalidCanonicalPath);
+        if self.kind == ResourceKind::WebPage {
+            let canonical = canonicalize_web_url(&self.locator)
+                .map_err(|_| ResourceValidationError::InvalidWebUrl)?;
+            if canonical != self.locator || canonical != self.canonical_locator {
+                return Err(ResourceValidationError::InvalidWebUrl);
+            }
+        } else {
+            validate_path_string(&self.locator)?;
+            validate_path_string(&self.canonical_locator)?;
+            if !std::path::Path::new(&self.locator).is_absolute() {
+                return Err(ResourceValidationError::RelativePath);
+            }
+            if !std::path::Path::new(&self.canonical_locator).is_absolute() {
+                return Err(ResourceValidationError::InvalidCanonicalPath);
+            }
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum WebUrlError {
+    #[error("URL must use http or https")]
+    UnsupportedScheme,
+    #[error("URL must contain a host")]
+    MissingHost,
+    #[error("URL userinfo is not allowed")]
+    UserInfo,
+    #[error("URL exceeds {WEB_URL_MAX_BYTES} bytes")]
+    TooLong,
+    #[error("URL parser rejected the value")]
+    Parse,
+}
+
+/// Canonicalize a web resource without retaining query strings or fragments.
+pub fn canonicalize_web_url(input: &str) -> Result<String, WebUrlError> {
+    if input.is_empty() || input.len() > WEB_URL_MAX_BYTES {
+        return Err(if input.len() > WEB_URL_MAX_BYTES {
+            WebUrlError::TooLong
+        } else {
+            WebUrlError::Parse
+        });
+    }
+    let mut url = url::Url::parse(input).map_err(|_| WebUrlError::Parse)?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(WebUrlError::UnsupportedScheme);
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(WebUrlError::UserInfo);
+    }
+    if url.host_str().is_none() {
+        return Err(WebUrlError::MissingHost);
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    if url.path().is_empty() {
+        url.set_path("/");
+    }
+    if matches!(
+        (url.scheme(), url.port()),
+        ("http", Some(80)) | ("https", Some(443))
+    ) {
+        url.set_port(None).map_err(|_| WebUrlError::Parse)?;
+    }
+    let canonical = url.to_string();
+    if canonical.len() > WEB_URL_MAX_BYTES {
+        return Err(WebUrlError::TooLong);
+    }
+    Ok(canonical)
+}
+
+#[must_use]
+pub fn canonical_web_url_hash(canonical_url: &str) -> String {
+    let digest = Sha256::digest(canonical_url.as_bytes());
+    let mut hash = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hash, "{byte:02x}");
+    }
+    hash
+}
+
+pub fn web_origin_pattern(canonical_url: &str) -> Result<String, WebUrlError> {
+    let url = url::Url::parse(canonical_url).map_err(|_| WebUrlError::Parse)?;
+    let host = url.host_str().ok_or(WebUrlError::MissingHost)?;
+    let mut origin = format!("{}://{host}", url.scheme());
+    if let Some(port) = url.port() {
+        origin.push(':');
+        origin.push_str(&port.to_string());
+    }
+    origin.push_str("/*");
+    Ok(origin)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ObservationSource {
+    #[serde(rename = "browser.chromium")]
+    BrowserChromium,
+    #[serde(rename = "vscode.workspace")]
+    VscodeWorkspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ObservationStatus {
+    Active,
+    Paused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationScope {
+    pub id: Uuid,
+    pub source: ObservationSource,
+    pub resource_id: Uuid,
+    pub status: ObservationStatus,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub updated_at: OffsetDateTime,
 }
 
 fn validate_path_string(value: &str) -> Result<(), ResourceValidationError> {
@@ -208,6 +374,8 @@ pub enum ActionSpec {
     LinuxPathOpen { resource_id: Uuid },
     #[serde(rename = "desktop.notification.show.v1")]
     DesktopNotificationShow { title: String, body: String },
+    #[serde(rename = "browser.tab.ensure_open.v1")]
+    BrowserTabEnsureOpen { resource_id: Uuid },
 }
 
 impl ActionSpec {
@@ -217,6 +385,7 @@ impl ActionSpec {
             Self::LinuxAppEnsureRunning { .. } => "linux.app.ensure_running.v1",
             Self::LinuxPathOpen { .. } => "linux.path.open.v1",
             Self::DesktopNotificationShow { .. } => "desktop.notification.show.v1",
+            Self::BrowserTabEnsureOpen { .. } => "browser.tab.ensure_open.v1",
         }
     }
 
@@ -228,6 +397,7 @@ impl ActionSpec {
                 validate_notification("title", title, 128)?;
                 validate_notification("body", body, 1024)
             }
+            Self::BrowserTabEnsureOpen { .. } => Ok(()),
         }
     }
 }
@@ -518,7 +688,7 @@ mod tests {
             },
             context: None,
             privacy: PrivacyClass::Normal,
-            data: SyntheticEventData {
+            data: EventData::Synthetic {
                 label: "smoke".to_owned(),
                 counter: 1,
             },
@@ -587,5 +757,38 @@ mod tests {
             );
         }
         assert!(validate_app_id(&"a".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn canonicalizes_web_urls_without_query_or_fragment() {
+        let canonical = canonicalize_web_url("https://Example.COM:443/research?id=123#section")
+            .expect("canonical URL");
+        assert_eq!(canonical, "https://example.com/research");
+        assert_eq!(
+            canonical_web_url_hash(&canonical),
+            "468164e75ba0e4cf47eee057fe3459fa5bc5fd4ba259de08f117c780e261da59"
+        );
+        assert!(canonicalize_web_url("file:///tmp/a").is_err());
+        assert!(canonicalize_web_url("https://user@example.com/").is_err());
+    }
+
+    #[test]
+    fn semantic_event_payloads_cannot_carry_raw_locations() {
+        let data = EventData::BrowserResourceOpened {
+            resource_id: Uuid::nil(),
+        };
+        let json = serde_json::to_value(data).expect("event data");
+        assert!(json.get("url").is_none());
+        assert!(json.get("path").is_none());
+    }
+
+    #[test]
+    fn event_type_and_data_kind_must_match() {
+        let mut event = event();
+        event.event_type = EventType::BrowserResourceOpenedV1;
+        assert!(matches!(
+            event.validate(),
+            Err(ValidationError::TypeDataMismatch)
+        ));
     }
 }

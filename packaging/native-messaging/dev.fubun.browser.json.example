@@ -1,0 +1,7 @@
+{
+  "name": "dev.fubun.browser",
+  "description": "Fubun browser integration",
+  "path": "/absolute/path/to/fubun-native-host",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://EXTENSION_ID/"]
+}

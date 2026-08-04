@@ -1,0 +1,37 @@
+{
+  "name": "fubun-vscode-extension",
+  "displayName": "Fubun",
+  "description": "Explicit local workspace observation for Fubun",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "publisher": "anythigok",
+  "engines": { "vscode": "^1.90.0" },
+  "main": "./dist/extension.js",
+  "extensionKind": ["ui"],
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": true },
+    "virtualWorkspaces": { "supported": false, "description": "Fubun currently supports local file workspaces only." }
+  },
+  "contributes": {
+    "commands": [
+      { "command": "fubun.observeCurrentWorkspace", "title": "Fubun: Observe Current Workspace" },
+      { "command": "fubun.stopObservingCurrentWorkspace", "title": "Fubun: Stop Observing Current Workspace" },
+      { "command": "fubun.showIntegrationStatus", "title": "Fubun: Show Integration Status" }
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "build": "pnpm --filter @fubun/protocol-ts build && tsc",
+    "package": "pnpm build && node package.mjs"
+  },
+  "dependencies": { "@fubun/protocol-ts": "workspace:*" },
+  "devDependencies": {
+    "@types/node": "22.13.4",
+    "@types/vscode": "1.97.0",
+    "typescript": "5.7.3"
+  }
+}

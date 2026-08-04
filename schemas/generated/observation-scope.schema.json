@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ObservationScope",
+  "type": "object",
+  "required": [
+    "created_at",
+    "id",
+    "resource_id",
+    "source",
+    "status",
+    "updated_at"
+  ],
+  "properties": {
+    "created_at": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "resource_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "source": {
+      "$ref": "#/definitions/ObservationSource"
+    },
+    "status": {
+      "$ref": "#/definitions/ObservationStatus"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ObservationSource": {
+      "type": "string",
+      "enum": [
+        "browser.chromium",
+        "vscode.workspace"
+      ]
+    },
+    "ObservationStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused"
+      ]
+    }
+  }
+}

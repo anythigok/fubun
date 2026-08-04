@@ -20,3 +20,16 @@
 - PreviewとRun直前のPreflightで必要ToolとResourceKindを再確認する。
 - Preview、Preflight、Dispatchは同一の単一Adapter Instance適格性判定を使い、Adapter状態を合成しない。
 - terminal Executionにpending/running Stepを残さず、選択済みAdapter Identityを成功・失敗の両方で履歴へ残す。
+- Browser本文、Query、Fragment、Title、FavIcon、Cookie、History、Tab IDを保存しない。
+- Browser ExtensionへContent Script、`chrome.scripting`、全サイト常時Host Permissionを追加しない。
+- Browser ActionはResource IDだけを受け取り、任意URLをDispatchしない。
+- Host Permissionはユーザー操作で許可されたOriginだけに限定し、Native Host `allowed_origins`へWildcardを置かない。
+- Native HostのstdoutはProtocol frame専用とし、診断はstderrだけへ出す。
+- Adapter EventはCoreがactor、source、received_at、identityを組み立て、Active Observation Scopeなしで保存しない。
+- 通常Clientの`event.ingest`は開発用Synthetic Eventだけとし、Browser/VS CodeのSemantic Eventを受理しない。
+- Native HostのAdapter UDSは単一Readerと単一Writer queueで扱い、Event AckとAction Executeをrequest_idで多重化する。
+- Browser ScopeのEnableはCore Ack後だけを成功扱いし、Pause/Permission解除はLocal Event送信を先に停止してからCoreへ同期する。
+- Browser/VS Code Adapter Instance内のEvent sequenceは単調増加にし、日時値や乱数をsequenceとして使わない。
+- VS Code Event-only Adapterは観察中に長時間接続を再利用し、Hello/Event Ack/Protocol Versionを厳格検証する。
+- VS Codeから本文、現在ファイル名、Terminal、Git差分、Workspace Settingsを取得しない。Remote、Multi-root、Virtual Workspaceは非対応とする。
+- Phase 3ではPattern Miner、Suggestion、Rule、Automatic Triggerを追加しない。

@@ -1,0 +1,17 @@
+{
+  "name": "fubun-integrations",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.4",
+    "@types/vscode": "1.97.0",
+    "esbuild": "0.25.0",
+    "typescript": "5.7.3"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": "dev.fubun.ritual/1",
+  "name": "Open registered browser page",
+  "actions": [
+    {
+      "type": "browser.tab.ensure_open.v1",
+      "resource_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "execution": {
+    "mode": "sequential",
+    "on_failure": "stop",
+    "timeout_seconds": 30
+  }
+}

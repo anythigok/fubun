@@ -5,3 +5,11 @@
 core.sock
 .idea/
 .vscode/
+/node_modules/
+/artifacts/
+**/node_modules/
+extensions/browser/dist/
+extensions/vscode/dist/
+packages/*/dist/
+*.vsix
+*.zip

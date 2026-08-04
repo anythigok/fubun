@@ -34,8 +34,9 @@ pub enum AdapterDispatchErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterRequirements {
     pub capability: &'static str,
-    pub required_tool: &'static str,
+    pub required_tool: Option<&'static str>,
     pub desktop_entry_id: Option<String>,
+    pub browser_resource_id: Option<Uuid>,
 }
 
 impl AdapterRequirements {
@@ -44,18 +45,27 @@ impl AdapterRequirements {
         match action {
             ActionSpec::LinuxAppEnsureRunning { app_id } => Self {
                 capability: "linux.app.ensure_running.v1",
-                required_tool: "gtk-launch",
+                required_tool: Some("gtk-launch"),
                 desktop_entry_id: Some(app_id.clone()),
+                browser_resource_id: None,
             },
             ActionSpec::LinuxPathOpen { .. } => Self {
                 capability: "linux.path.open.v1",
-                required_tool: "xdg-open",
+                required_tool: Some("xdg-open"),
                 desktop_entry_id: None,
+                browser_resource_id: None,
             },
             ActionSpec::DesktopNotificationShow { .. } => Self {
                 capability: "desktop.notification.show.v1",
-                required_tool: "notify-send",
+                required_tool: Some("notify-send"),
                 desktop_entry_id: None,
+                browser_resource_id: None,
+            },
+            ActionSpec::BrowserTabEnsureOpen { resource_id } => Self {
+                capability: "browser.tab.ensure_open.v1",
+                required_tool: None,
+                desktop_entry_id: None,
+                browser_resource_id: Some(*resource_id),
             },
         }
     }
@@ -66,6 +76,12 @@ pub struct EligibleAdapter {
     pub adapter_id: String,
     pub instance_id: Uuid,
 }
+
+/// Internal identity for one concrete adapter socket. An adapter instance ID
+/// may be reused by a reconnecting process, so it is not sufficient to guard
+/// connection teardown or pending dispatch cleanup by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionToken(Uuid);
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AdapterEligibilityError {
@@ -106,9 +122,15 @@ pub enum AdapterRegistrationError {
 }
 
 const LINUX_ADAPTER_ID: &str = "dev.fubun.linux";
+const BROWSER_ADAPTER_ID: &str = "dev.fubun.browser.chromium";
+const VSCODE_ADAPTER_ID: &str = "dev.fubun.vscode";
 const MAX_ADAPTER_VERSION_BYTES: usize = 128;
 const MAX_CAPABILITIES: usize = 16;
 const MAX_CAPABILITY_BYTES: usize = 128;
+const EVENT_CAPABILITIES: [&str; 2] = [
+    "dev.fubun.browser.resource.opened.v1",
+    "dev.fubun.vscode.workspace.opened.v1",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchedActionResult {
@@ -118,11 +140,13 @@ pub struct DispatchedActionResult {
 
 struct PendingRequest {
     identity: EligibleAdapter,
+    connection_token: ConnectionToken,
     action_execution_id: Uuid,
     sender: oneshot::Sender<Result<ActionResult, AdapterDispatchErrorKind>>,
 }
 
 struct AdapterConnection {
+    connection_token: ConnectionToken,
     hello: AdapterHello,
     sender: mpsc::Sender<AdapterRequestEnvelope>,
     connected_at: OffsetDateTime,
@@ -137,7 +161,10 @@ pub struct AdapterManager {
 
 impl AdapterManager {
     pub fn validate_hello(hello: &AdapterHello) -> Result<(), AdapterRegistrationError> {
-        if hello.adapter_id != LINUX_ADAPTER_ID {
+        if !matches!(
+            hello.adapter_id.as_str(),
+            LINUX_ADAPTER_ID | BROWSER_ADAPTER_ID | VSCODE_ADAPTER_ID
+        ) {
             return Err(AdapterRegistrationError::UnknownAdapter);
         }
         if hello.adapter_version.is_empty()
@@ -149,13 +176,17 @@ impl AdapterManager {
         {
             return Err(AdapterRegistrationError::InvalidVersion);
         }
-        if hello.action_capabilities.is_empty()
-            || hello.action_capabilities.len() > MAX_CAPABILITIES
+        if hello.action_capabilities.len() + hello.event_capabilities.len() > MAX_CAPABILITIES
+            || (hello.action_capabilities.is_empty() && hello.event_capabilities.is_empty())
         {
             return Err(AdapterRegistrationError::InvalidCapabilityCount);
         }
         let mut seen = HashSet::new();
-        for capability in &hello.action_capabilities {
+        for capability in hello
+            .action_capabilities
+            .iter()
+            .chain(hello.event_capabilities.iter())
+        {
             if capability.is_empty()
                 || capability.len() > MAX_CAPABILITY_BYTES
                 || capability
@@ -164,7 +195,39 @@ impl AdapterManager {
             {
                 return Err(AdapterRegistrationError::InvalidCapability);
             }
-            if descriptor_by_type(capability).is_none() {
+            if descriptor_by_type(capability).is_none()
+                && !EVENT_CAPABILITIES.contains(&capability.as_str())
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if hello.adapter_id == VSCODE_ADAPTER_ID && descriptor_by_type(capability).is_some() {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if hello.adapter_id == BROWSER_ADAPTER_ID && capability.starts_with("dev.fubun.vscode.")
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if capability == "browser.tab.ensure_open.v1" && hello.adapter_id != BROWSER_ADAPTER_ID
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if matches!(
+                capability.as_str(),
+                "linux.app.ensure_running.v1"
+                    | "linux.path.open.v1"
+                    | "desktop.notification.show.v1"
+            ) && hello.adapter_id != LINUX_ADAPTER_ID
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if capability == "dev.fubun.browser.resource.opened.v1"
+                && hello.adapter_id != BROWSER_ADAPTER_ID
+            {
+                return Err(AdapterRegistrationError::UnknownCapability);
+            }
+            if capability == "dev.fubun.vscode.workspace.opened.v1"
+                && hello.adapter_id != VSCODE_ADAPTER_ID
+            {
                 return Err(AdapterRegistrationError::UnknownCapability);
             }
             if !seen.insert(capability) {
@@ -178,19 +241,24 @@ impl AdapterManager {
         &self,
         hello: AdapterHello,
         sender: mpsc::Sender<AdapterRequestEnvelope>,
-    ) -> Result<(), AdapterRegistrationError> {
+    ) -> Result<ConnectionToken, AdapterRegistrationError> {
         Self::validate_hello(&hello)?;
         let now = OffsetDateTime::now_utc();
-        self.connections.lock().await.insert(
+        let connection_token = ConnectionToken(Uuid::new_v4());
+        let replaced = self.connections.lock().await.insert(
             hello.instance_id,
             AdapterConnection {
+                connection_token,
                 hello,
                 sender,
                 connected_at: now,
                 last_seen_at: now,
             },
         );
-        Ok(())
+        if let Some(previous) = replaced {
+            self.fail_pending_for_token(previous.connection_token);
+        }
+        Ok(connection_token)
     }
 
     pub async fn touch(&self, instance_id: Uuid) {
@@ -199,34 +267,53 @@ impl AdapterManager {
         }
     }
 
-    pub async fn disconnect(&self, instance_id: Uuid) {
-        self.connections.lock().await.remove(&instance_id);
-        let mut pending = self.pending.lock().expect("pending mutex poisoned");
-        let requests: Vec<_> = pending
-            .iter()
-            .filter_map(|(id, request)| {
-                (request.identity.instance_id == instance_id).then_some(*id)
-            })
-            .collect();
-        for request_id in requests {
-            if let Some(request) = pending.remove(&request_id) {
-                let _ = request
-                    .sender
-                    .send(Err(AdapterDispatchErrorKind::Disconnected));
+    pub async fn disconnect_if_current(
+        &self,
+        instance_id: Uuid,
+        connection_token: ConnectionToken,
+    ) {
+        let removed = {
+            let mut connections = self.connections.lock().await;
+            if connections
+                .get(&instance_id)
+                .is_some_and(|connection| connection.connection_token == connection_token)
+            {
+                connections.remove(&instance_id);
+                true
+            } else {
+                false
             }
+        };
+        if !removed {
+            return;
         }
+        self.fail_pending_for_token(connection_token);
     }
 
     pub async fn shutdown(&self) {
-        let instances: Vec<Uuid> = self.connections.lock().await.keys().copied().collect();
-        for instance_id in instances {
-            self.disconnect(instance_id).await;
-        }
+        self.connections.lock().await.clear();
         let mut pending = self.pending.lock().expect("pending mutex poisoned");
         for (_, request) in pending.drain() {
             let _ = request
                 .sender
                 .send(Err(AdapterDispatchErrorKind::Disconnected));
+        }
+    }
+
+    fn fail_pending_for_token(&self, connection_token: ConnectionToken) {
+        let mut pending = self.pending.lock().expect("pending mutex poisoned");
+        let request_ids: Vec<_> = pending
+            .iter()
+            .filter_map(|(request_id, request)| {
+                (request.connection_token == connection_token).then_some(*request_id)
+            })
+            .collect();
+        for request_id in request_ids {
+            if let Some(request) = pending.remove(&request_id) {
+                let _ = request
+                    .sender
+                    .send(Err(AdapterDispatchErrorKind::Disconnected));
+            }
         }
     }
 
@@ -250,7 +337,7 @@ impl AdapterManager {
         timeout: Duration,
     ) -> Result<DispatchedActionResult, DispatchedActionError> {
         let requirements = AdapterRequirements::from_action(&action);
-        let (identity, sender) =
+        let (identity, connection_token) =
             self.select_eligible(&requirements)
                 .await
                 .map_err(|error| DispatchedActionError {
@@ -277,14 +364,23 @@ impl AdapterManager {
             }),
         };
         let (sender_reply, receiver_reply) = oneshot::channel();
-        self.pending.lock().expect("pending mutex poisoned").insert(
-            request_id,
-            PendingRequest {
-                identity: identity.clone(),
-                action_execution_id,
-                sender: sender_reply,
-            },
-        );
+        let sender = self
+            .insert_pending_if_current(
+                &identity,
+                connection_token,
+                request_id,
+                PendingRequest {
+                    identity: identity.clone(),
+                    connection_token,
+                    action_execution_id,
+                    sender: sender_reply,
+                },
+            )
+            .await
+            .ok_or_else(|| DispatchedActionError {
+                identity: Some(identity.clone()),
+                kind: AdapterDispatchErrorKind::Disconnected,
+            })?;
         let mut pending_guard = PendingRequestGuard::new(self.pending.clone(), request_id);
         if sender.send(request).await.is_err() {
             return Err(DispatchedActionError {
@@ -334,7 +430,9 @@ impl AdapterManager {
         } else {
             match response.body {
                 AdapterResponseBody::ActionResult(result) => Ok(result),
-                AdapterResponseBody::Status(_) => Err(AdapterDispatchErrorKind::Protocol),
+                AdapterResponseBody::Status(_) | AdapterResponseBody::EventEmit(_) => {
+                    Err(AdapterDispatchErrorKind::Protocol)
+                }
             }
         };
         let _ = pending.sender.send(result);
@@ -364,6 +462,8 @@ impl AdapterManager {
                 instance_id: connection.hello.instance_id,
                 connected: true,
                 capabilities: connection.hello.action_capabilities.clone(),
+                event_capabilities: connection.hello.event_capabilities.clone(),
+                permitted_resource_ids: connection.hello.status.permitted_resource_ids.clone(),
                 connected_at: connection
                     .connected_at
                     .format(&time::format_description::well_known::Rfc3339)
@@ -380,6 +480,15 @@ impl AdapterManager {
 
     pub async fn connected_count(&self) -> usize {
         self.connections.lock().await.len()
+    }
+
+    pub async fn connected_count_by_id(&self, adapter_id: &str) -> usize {
+        self.connections
+            .lock()
+            .await
+            .values()
+            .filter(|connection| connection.hello.adapter_id == adapter_id)
+            .count()
     }
 
     pub async fn tool_available(&self, tool: &str) -> bool {
@@ -401,8 +510,7 @@ impl AdapterManager {
     async fn select_eligible(
         &self,
         requirements: &AdapterRequirements,
-    ) -> Result<(EligibleAdapter, mpsc::Sender<AdapterRequestEnvelope>), AdapterEligibilityError>
-    {
+    ) -> Result<(EligibleAdapter, ConnectionToken), AdapterEligibilityError> {
         let connections = self.connections.lock().await;
         if connections.is_empty() {
             return Err(AdapterEligibilityError::Unavailable);
@@ -416,7 +524,7 @@ impl AdapterManager {
                         adapter_id: connection.hello.adapter_id.clone(),
                         instance_id: *instance_id,
                     },
-                    connection.sender.clone(),
+                    connection.connection_token,
                 )
             })
             .collect();
@@ -426,24 +534,50 @@ impl AdapterManager {
             .next()
             .ok_or(AdapterEligibilityError::Ineligible)
     }
+
+    async fn insert_pending_if_current(
+        &self,
+        identity: &EligibleAdapter,
+        connection_token: ConnectionToken,
+        request_id: Uuid,
+        request: PendingRequest,
+    ) -> Option<mpsc::Sender<AdapterRequestEnvelope>> {
+        // Hold the connection lock while inserting the pending request. A
+        // replacement registration takes the same lock before draining the
+        // old token, so a request can never be registered after its socket
+        // has already been replaced.
+        let connections = self.connections.lock().await;
+        let connection = connections.get(&identity.instance_id)?;
+        if connection.connection_token != connection_token {
+            return None;
+        }
+        let sender = connection.sender.clone();
+        self.pending
+            .lock()
+            .expect("pending mutex poisoned")
+            .insert(request_id, request);
+        Some(sender)
+    }
 }
 
 fn connection_satisfies(
     connection: &AdapterConnection,
     requirements: &AdapterRequirements,
 ) -> bool {
-    connection.hello.adapter_id == LINUX_ADAPTER_ID
+    adapter_id_allowed_for_capability(&connection.hello.adapter_id, requirements.capability)
         && connection
             .hello
             .action_capabilities
             .iter()
             .any(|candidate| candidate == requirements.capability)
-        && connection
-            .hello
-            .status
-            .tools
-            .iter()
-            .any(|candidate| candidate.name == requirements.required_tool && candidate.available)
+        && requirements.required_tool.is_none_or(|tool| {
+            connection
+                .hello
+                .status
+                .tools
+                .iter()
+                .any(|candidate| candidate.name == tool && candidate.available)
+        })
         && requirements
             .desktop_entry_id
             .as_ref()
@@ -455,6 +589,24 @@ fn connection_satisfies(
                     .iter()
                     .any(|candidate| candidate == entry_id)
             })
+        && requirements.browser_resource_id.is_none_or(|resource_id| {
+            connection.hello.adapter_id == BROWSER_ADAPTER_ID
+                && connection
+                    .hello
+                    .status
+                    .permitted_resource_ids
+                    .contains(&resource_id)
+        })
+}
+
+fn adapter_id_allowed_for_capability(adapter_id: &str, capability: &str) -> bool {
+    match capability {
+        "browser.tab.ensure_open.v1" => adapter_id == BROWSER_ADAPTER_ID,
+        "linux.app.ensure_running.v1" | "linux.path.open.v1" | "desktop.notification.show.v1" => {
+            adapter_id == LINUX_ADAPTER_ID
+        }
+        _ => false,
+    }
 }
 
 struct PendingRequestGuard {
@@ -515,6 +667,7 @@ mod tests {
             adapter_version: "test".to_owned(),
             instance_id,
             action_capabilities: capabilities.into_iter().map(str::to_owned).collect(),
+            event_capabilities: Vec::new(),
             status: AdapterStatusSnapshot {
                 tools: tools
                     .into_iter()
@@ -524,6 +677,7 @@ mod tests {
                     })
                     .collect(),
                 desktop_entry_ids: desktop_entry_ids.into_iter().map(str::to_owned).collect(),
+                permitted_resource_ids: Vec::new(),
             },
         }
     }
@@ -609,7 +763,7 @@ mod tests {
         let manager = AdapterManager::default();
         let instance_id = Uuid::new_v4();
         let (sender, mut receiver) = mpsc::channel(1);
-        manager
+        let connection_token = manager
             .register(
                 hello(instance_id, vec!["desktop.notification.show.v1"]),
                 sender,
@@ -652,7 +806,9 @@ mod tests {
                 .await
         });
         receiver.recv().await.expect("request");
-        manager.disconnect(instance_id).await;
+        manager
+            .disconnect_if_current(instance_id, connection_token)
+            .await;
         let disconnect_error = disconnect.await.expect("task").expect_err("disconnect");
         assert_eq!(
             disconnect_error.kind,
@@ -724,6 +880,90 @@ mod tests {
             send_failure.identity.map(|identity| identity.instance_id),
             Some(send_failure_instance)
         );
+        assert_eq!(manager.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_connection_token_cannot_remove_replacement_or_its_pending_request() {
+        let manager = AdapterManager::default();
+        let instance_id = Uuid::new_v4();
+        let (sender_a, mut receiver_a) = mpsc::channel(1);
+        let token_a = manager
+            .register(
+                hello(instance_id, vec!["desktop.notification.show.v1"]),
+                sender_a,
+            )
+            .await
+            .expect("register A");
+
+        let manager_a = manager.clone();
+        let pending_a = tokio::spawn(async move {
+            manager_a
+                .execute(
+                    ActionSpec::DesktopNotificationShow {
+                        title: "A".to_owned(),
+                        body: "A".to_owned(),
+                    },
+                    None,
+                    Duration::from_secs(30),
+                )
+                .await
+        });
+        receiver_a.recv().await.expect("A request");
+        assert_eq!(manager.pending_count(), 1);
+
+        let (sender_b, mut receiver_b) = mpsc::channel(1);
+        let token_b = manager
+            .register(
+                hello(instance_id, vec!["desktop.notification.show.v1"]),
+                sender_b,
+            )
+            .await
+            .expect("register B");
+        assert_ne!(token_a, token_b);
+        let error_a = pending_a
+            .await
+            .expect("A task")
+            .expect_err("A must be disconnected on replacement");
+        assert_eq!(error_a.kind, AdapterDispatchErrorKind::Disconnected);
+        assert_eq!(manager.connected_count().await, 1);
+
+        manager.disconnect_if_current(instance_id, token_a).await;
+        assert_eq!(manager.connected_count().await, 1);
+
+        let manager_b = manager.clone();
+        let pending_b = tokio::spawn(async move {
+            manager_b
+                .execute(
+                    ActionSpec::DesktopNotificationShow {
+                        title: "B".to_owned(),
+                        body: "B".to_owned(),
+                    },
+                    None,
+                    Duration::from_secs(1),
+                )
+                .await
+        });
+        let request_b = receiver_b.recv().await.expect("B request");
+        assert_eq!(manager.pending_count(), 1);
+        manager.disconnect_if_current(instance_id, token_a).await;
+        assert_eq!(manager.connected_count().await, 1);
+        assert_eq!(manager.pending_count(), 1);
+        manager
+            .resolve(AdapterResponseEnvelope {
+                protocol_version: fubun_protocol::CURRENT_PROTOCOL_VERSION,
+                request_id: request_b.request_id,
+                action_execution_id: request_b.action_execution_id,
+                body: AdapterResponseBody::ActionResult(ActionResult {
+                    status: fubun_protocol::AdapterActionStatus::Succeeded,
+                    result_code: "ok".to_owned(),
+                    redacted_message: "ok".to_owned(),
+                }),
+            })
+            .await;
+        assert!(pending_b.await.expect("B task").is_ok());
+        manager.disconnect_if_current(instance_id, token_b).await;
+        assert_eq!(manager.connected_count().await, 0);
         assert_eq!(manager.pending_count(), 0);
     }
 

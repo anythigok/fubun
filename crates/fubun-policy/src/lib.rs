@@ -73,9 +73,24 @@ pub const NOTIFICATION_SHOW: ActionDescriptor = ActionDescriptor {
     default_timeout_ms: 10_000,
 };
 
+pub const BROWSER_TAB_ENSURE_OPEN: ActionDescriptor = ActionDescriptor {
+    action_type: "browser.tab.ensure_open.v1",
+    schema_version: "1",
+    risk_level: RiskLevel::R1,
+    idempotency: Idempotency::BestEffort,
+    revertability: Revertability::PartiallyRevertable,
+    required_capability: "browser.tab.ensure_open.v1",
+    default_timeout_ms: 10_000,
+};
+
 #[must_use]
-pub fn descriptors() -> [ActionDescriptor; 3] {
-    [APP_ENSURE_RUNNING, PATH_OPEN, NOTIFICATION_SHOW]
+pub fn descriptors() -> [ActionDescriptor; 4] {
+    [
+        APP_ENSURE_RUNNING,
+        PATH_OPEN,
+        NOTIFICATION_SHOW,
+        BROWSER_TAB_ENSURE_OPEN,
+    ]
 }
 
 #[must_use]
@@ -84,6 +99,7 @@ pub fn descriptor(action: &ActionSpec) -> &'static ActionDescriptor {
         ActionSpec::LinuxAppEnsureRunning { .. } => &APP_ENSURE_RUNNING,
         ActionSpec::LinuxPathOpen { .. } => &PATH_OPEN,
         ActionSpec::DesktopNotificationShow { .. } => &NOTIFICATION_SHOW,
+        ActionSpec::BrowserTabEnsureOpen { .. } => &BROWSER_TAB_ENSURE_OPEN,
     }
 }
 
@@ -93,6 +109,7 @@ pub fn descriptor_by_type(action_type: &str) -> Option<&'static ActionDescriptor
         "linux.app.ensure_running.v1" => Some(&APP_ENSURE_RUNNING),
         "linux.path.open.v1" => Some(&PATH_OPEN),
         "desktop.notification.show.v1" => Some(&NOTIFICATION_SHOW),
+        "browser.tab.ensure_open.v1" => Some(&BROWSER_TAB_ENSURE_OPEN),
         _ => None,
     }
 }
@@ -125,6 +142,12 @@ pub fn approval_fields(action: &ActionSpec) -> ApprovalFields {
             action_type: descriptor.action_type,
             capability: descriptor.required_capability,
             resource_id: None,
+            app_id: None,
+        },
+        ActionSpec::BrowserTabEnsureOpen { resource_id } => ApprovalFields {
+            action_type: descriptor.action_type,
+            capability: descriptor.required_capability,
+            resource_id: Some(*resource_id),
             app_id: None,
         },
     }

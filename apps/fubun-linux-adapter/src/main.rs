@@ -94,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|value| (*value).to_owned())
                 .collect(),
+            event_capabilities: Vec::new(),
             status: collect_status(),
         }),
     };
@@ -139,6 +140,7 @@ fn collect_status() -> AdapterStatusSnapshot {
             })
             .collect(),
         desktop_entry_ids: desktop_entry_ids(),
+        permitted_resource_ids: Vec::new(),
     }
 }
 
@@ -209,6 +211,7 @@ async fn handle_request(
             AdapterResponseBody::ActionResult(result)
         }
         AdapterRequestBody::Status(_) => AdapterResponseBody::Status(collect_status()),
+        AdapterRequestBody::EventAck(_) => AdapterResponseBody::Status(collect_status()),
     };
     AdapterResponseEnvelope {
         protocol_version: CURRENT_PROTOCOL_VERSION,
@@ -246,6 +249,9 @@ async fn execute_action(
             } else {
                 Err("notification failed".to_owned())
             }
+        }
+        ActionSpec::BrowserTabEnsureOpen { .. } => {
+            Err("browser action is not supported by the Linux adapter".to_owned())
         }
     }
 }
@@ -305,6 +311,7 @@ async fn open_path(
     let kind_matches = match resource.kind {
         ResourceKind::File => metadata.is_file(),
         ResourceKind::Directory => metadata.is_dir(),
+        ResourceKind::WebPage => false,
     };
     if !kind_matches {
         return Err("resource type changed".to_owned());

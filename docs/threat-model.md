@@ -66,6 +66,54 @@ directory 0700、database 0600で他ユーザーのreadを制限します。保�
 
 Daemon再起動時にrunning Executionをabortedへ遷移し、同じExecutionのpending/running Stepも `daemon_restarted` と終了時刻を付けてabortedにします。完了済みStepは保持し、実行Lockは削除します。
 
+### Malicious Web Page / Content Script相当の入力
+
+Browser Extensionは本文、Content Script、Cookie、History、WebRequestを扱わず、`tabs.onUpdated`で取得できるhttp/https URLを登録済みhashと照合するだけです。Native Host/Coreへ未登録URL、query、fragment、title、tab IDは送信しません。Adapterから届くEventはCoreが固定Event Type、actor=user、source、identity、Resource kind、Active Scopeを検証して組み立てます。
+
+### Native Host Origin Spoofing / Wildcard allowed_origins
+
+Manifestの`allowed_origins`はexactな32文字Extension IDだけを原則とし、Wildcardを許可しません。Native Host自身も最初のcaller originを`chrome-extension://<id>/`として検証し、0600設定ファイルの許可IDとExtension HelloのIDが一致しなければ接続を拒否します。
+
+### Native Host stdout corruption / Oversized or Partial Native Message
+
+Native Host stdoutは32-bit native-endian frame以外を書きません。0長、256 KiB超、header/bodyの途中切断、不正UTF-8/JSON、未知Message Typeは安全に拒否し、CoreのUDS frame上限とは別に検査します。診断はstderrだけです。
+
+### Browser Permission Revocation / Stale Resource Mapping
+
+Permission解除を検出したExtensionは、まずLocal Mappingをinactive/pause pendingへ永続化してEvent対象から外します。その後に各Core Scope Pauseを試行し、成功したMappingだけを削除します。Core不達時もLocal Event送信は再開せず、Storage更新が完了してからNative Portを再接続します。Service Worker起動時はPermissionを再照合し、残ったpause pending Scopeを一度だけ再同期します。Browser Adapterの新Instanceは許可済みResource ID snapshotを再宣言し、Coreは同一Instance内のPermission、Capability、Resource状態を同時に満たす場合だけAction/Eventを受け付けます。
+
+PauseはCore側で冪等化されているため、Commit後に応答を失った再送でも既にpausedのScopeを成功として返します。Local mappingは再送成功後にだけ削除し、pause_pendingを永久に保持しません。
+
+### Raw URL Leakage / Query Token Leakage / Incognito Leakage
+
+Canonical URLはquery/fragmentを除去してResource作成時だけ一時利用し、Event、通常Log、Execution History、Extension Storageには保存しません。Incognito Tabは無視し、許可されていないOriginへNative Messageを送信しません。
+
+### Adapter Event Spoofing / Event Capability Spoofing
+
+Adapter ID、Event Capability、Event Typeの組合せは固定Registryで検証し、未知・重複・空Capabilityを拒否します。Browser EventはBrowser Adapterかつ`dev.fubun.browser.resource.opened.v1`、VS Code EventはVS Code Event-only Adapterかつ`dev.fubun.vscode.workspace.opened.v1`だけを許可します。
+
+### Inactive Scope / Wrong Resource Kind
+
+Browser Eventはweb.page Resourceとactive browser Scope、VS Code Eventはfilesystem.directory Resourceとactive VS Code Scopeが必須です。paused Scope、別Source、Resource kind不一致、Browser StatusのPermission不足では保存しません。
+
+### VS Code Remote / Multi-root / Untrusted Workspace
+
+Extensionはsingle-folder Local file workspaceだけを対象にし、Multi-root、SSH/WSL/Dev Container/Codespaces、Virtual/Untitledは拒否します。Workspace本文、現在ファイル名、Terminal入力、Git差分、Settingsは読みません。Untrusted WorkspaceはVS Code manifest上でサポート宣言しますが、明示ObserveなしのEventは生成しません。
+
+### Extension Storage Tampering / Browser Action URL Substitution
+
+StorageにはResource ID、Scope ID、canonical hash、origin pattern、label、schema versionだけを保存します。Action RequestはResource IDとCore-resolved canonical Resourceだけを受け、ExtensionはLocal Mapping、現在Permission、URL hashを再照合してから既存Tab確認または新規Tab作成を行います。任意URLやResource ID mismatchは拒否します。
+
+### Native Host Disconnect / Service Worker Restart / Reconnect Storm
+
+Native Port切断時はPending Native Requestをすべてrejectし、指数Backoff（上限30秒）で接続を一度だけ再試行します。Native HostのCore Adapter streamはReaderを一つに固定し、Event Ackをrequest ID別に配送するため、Action ExecuteがAckより先に到着しても誤配送しません。Service WorkerはStorageからMappingを復元し、global stateだけを正本にしません。Core側のPending RequestはAdapter Disconnect、Timeout、Shutdownで解放されます。
+
+CoreのAdapter接続は`adapter_instance_id`とは別のConnection Tokenで世代識別します。同じInstance IDの新接続が登録された後に旧接続が終了しても、条件付きDisconnectは新接続を削除せず、旧TokenのPendingだけを解放します。Browser EventのsequenceはHello完了後の現Adapter Instanceに対して発行し、旧Instanceで払い出した番号を新接続へ持ち込まず、新Instanceでは1から開始します。
+
+### Semantic Event Injection / VS Code Adapter Session
+
+通常Clientの`event.ingest`は開発用Synthetic Eventだけを許可し、Browser/VS CodeのSemantic Eventを受理しません。Semantic EventはAdapter Helloの固定ID/Event Capability、Resource kind、Active Scope、Browser Permission snapshotを検証した後にCoreが構築します。VS Code Event-only AdapterはEventごとの短命接続を使わず、Extension activation中の長時間UDS sessionでHello、Event Ack、request ID、protocol version、bounded frameを検証します。切断時はPending Eventを解放し、観察対象がない場合は再接続しません。
+
 ## Out of scope
 
-Fubunはkernel/root compromise、同一ユーザーの完全な侵害、physical attacker、memory scraping、malicious compiler、disk encryption、backup policy、Adapter binary自体の侵害を防御対象にしません。また禁止データを入力dataの意味から完全判定するDLP機能、Universal Undo、外部network隔離を提供しません。
+Fubunはkernel/root compromise、同一ユーザーの完全な侵害、physical attacker、memory scraping、malicious compiler、disk encryption、backup policy、Adapter binary自体の侵害を防御対象にしません。また禁止データを入力dataの意味から完全判定するDLP機能、Universal Undo、外部network隔離、Chrome Web Store/VS Code Marketplaceの配布審査、悪意あるBrowser/VS Code本体を提供しません。

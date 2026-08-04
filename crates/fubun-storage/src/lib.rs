@@ -11,16 +11,18 @@ use std::{
 
 use fubun_domain::{
     Actor, Approval, Event, EventType, Execution, ExecutionStatus, ExecutionStep,
-    ExecutionStepStatus, PrivacyClass, Resource, ResourceKind, ResourceScope, Ritual,
-    RitualDefinition, RitualStatus, RitualVersion, Sensitivity, TriggerKind, ValidationError,
+    ExecutionStepStatus, ObservationScope, ObservationSource, ObservationStatus, PrivacyClass,
+    Resource, ResourceKind, ResourceScope, Ritual, RitualDefinition, RitualStatus, RitualVersion,
+    Sensitivity, TriggerKind, ValidationError,
 };
 use rusqlite::{params, Connection, ErrorCode, OptionalExtension};
+use serde_json::Value;
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -96,6 +98,9 @@ enum Operation {
     GetExecution(Uuid),
     AbortRunningExecutions,
     Counts,
+    EnsureObservationScope(ObservationScope),
+    ListObservationScopes(Option<ObservationSource>),
+    PauseObservationScope(Uuid),
 }
 
 enum StorageResponse {
@@ -121,6 +126,8 @@ enum StorageResponse {
         draft: usize,
         active: usize,
     },
+    ObservationScope(ObservationScope),
+    ObservationScopes(Vec<ObservationScope>),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -450,6 +457,51 @@ impl StorageHandle {
         }
     }
 
+    pub async fn ensure_observation_scope(
+        &self,
+        scope: ObservationScope,
+    ) -> Result<ObservationScope, StorageError> {
+        match self
+            .request(Operation::EnsureObservationScope(scope))
+            .await?
+        {
+            StorageResponse::ObservationScope(scope) => Ok(scope),
+            _ => Err(StorageError::InvalidData(
+                "unexpected observation scope response".to_owned(),
+            )),
+        }
+    }
+
+    pub async fn list_observation_scopes(
+        &self,
+        source: Option<ObservationSource>,
+    ) -> Result<Vec<ObservationScope>, StorageError> {
+        match self
+            .request(Operation::ListObservationScopes(source))
+            .await?
+        {
+            StorageResponse::ObservationScopes(scopes) => Ok(scopes),
+            _ => Err(StorageError::InvalidData(
+                "unexpected observation scope list response".to_owned(),
+            )),
+        }
+    }
+
+    pub async fn pause_observation_scope(
+        &self,
+        scope_id: Uuid,
+    ) -> Result<ObservationScope, StorageError> {
+        match self
+            .request(Operation::PauseObservationScope(scope_id))
+            .await?
+        {
+            StorageResponse::ObservationScope(scope) => Ok(scope),
+            _ => Err(StorageError::InvalidData(
+                "unexpected observation pause response".to_owned(),
+            )),
+        }
+    }
+
     #[must_use]
     pub fn database_path(&self) -> &Path {
         self.database_path.as_path()
@@ -662,9 +714,101 @@ fn migrate(connection: &mut Connection) -> Result<(), StorageError> {
         let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
         transaction.execute(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
-            params![SCHEMA_VERSION, now],
+            params![3_u32, now],
         )?;
         transaction.commit()?;
+    }
+    let current = current_schema_version(connection)?;
+    if current == 3 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE observation_scopes (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL CHECK(source IN ('browser.chromium', 'vscode.workspace')),
+                resource_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('active', 'paused')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(resource_id) REFERENCES resources(id),
+                UNIQUE(source, resource_id)
+            );
+            CREATE INDEX observation_scopes_source_idx ON observation_scopes(source);",
+        )?;
+        migrate_legacy_event_payloads(&transaction)?;
+        let now = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+            params![4_u32, now],
+        )?;
+        transaction.commit()?;
+    }
+    Ok(())
+}
+
+/// Phase 1 stored synthetic data as `{label, counter}`. Phase 2 introduced a
+/// strict tagged `EventData`; normalize legacy rows during the v4 transaction
+/// so existing event history remains readable without weakening the current
+/// canonical schema.
+fn migrate_legacy_event_payloads(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<(), StorageError> {
+    let events_table_exists = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if events_table_exists == 0 {
+        return Ok(());
+    }
+    let mut statement = transaction.prepare(
+        "SELECT id, data_json, canonical_json FROM events
+         WHERE event_type = 'dev.fubun.dev.synthetic.v1'",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    for (id, data_json, canonical_json) in rows {
+        let mut data: Value = serde_json::from_str(&data_json)?;
+        let mut canonical: Value = serde_json::from_str(&canonical_json)?;
+        let is_legacy = data
+            .as_object()
+            .is_some_and(|object| !object.contains_key("kind"));
+        if !is_legacy {
+            continue;
+        }
+        let Some(data_object) = data.as_object_mut() else {
+            continue;
+        };
+        if !data_object.contains_key("label") || !data_object.contains_key("counter") {
+            continue;
+        }
+        let Some(canonical_data) = canonical.get_mut("data").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if canonical_data.contains_key("kind")
+            || !canonical_data.contains_key("label")
+            || !canonical_data.contains_key("counter")
+        {
+            continue;
+        }
+        data_object.insert("kind".to_owned(), Value::String("synthetic".to_owned()));
+        canonical_data.insert("kind".to_owned(), Value::String("synthetic".to_owned()));
+        transaction.execute(
+            "UPDATE events SET data_json = ?1, canonical_json = ?2 WHERE id = ?3",
+            params![
+                serde_json::to_string(&data)?,
+                serde_json::to_string(&canonical)?,
+                id
+            ],
+        )?;
     }
     Ok(())
 }
@@ -809,6 +953,78 @@ fn execute_operation(
                 draft,
                 active,
             })
+        }
+        Operation::EnsureObservationScope(scope) => {
+            let existing = connection
+                .query_row(
+                    "SELECT id, source, resource_id, status, created_at, updated_at
+                     FROM observation_scopes WHERE source = ?1 AND resource_id = ?2",
+                    params![
+                        observation_source_name(scope.source),
+                        scope.resource_id.to_string()
+                    ],
+                    observation_scope_from_sql_row,
+                )
+                .optional()?;
+            if let Some(mut existing) = existing {
+                existing.status = ObservationStatus::Active;
+                existing.updated_at = scope.updated_at;
+                connection.execute(
+                    "UPDATE observation_scopes SET status = 'active', updated_at = ?1 WHERE id = ?2",
+                    params![format_ts(existing.updated_at)?, existing.id.to_string()],
+                )?;
+                Ok(StorageResponse::ObservationScope(existing))
+            } else {
+                connection.execute(
+                    "INSERT INTO observation_scopes(id, source, resource_id, status, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        scope.id.to_string(),
+                        observation_source_name(scope.source),
+                        scope.resource_id.to_string(),
+                        observation_status_name(scope.status),
+                        format_ts(scope.created_at)?,
+                        format_ts(scope.updated_at)?,
+                    ],
+                )?;
+                Ok(StorageResponse::ObservationScope(scope))
+            }
+        }
+        Operation::ListObservationScopes(source) => {
+            let mut statement = connection.prepare(
+                "SELECT id, source, resource_id, status, created_at, updated_at
+                 FROM observation_scopes
+                 WHERE (?1 IS NULL OR source = ?1)
+                 ORDER BY created_at ASC, id ASC",
+            )?;
+            let rows = statement.query_map(
+                params![source.map(observation_source_name)],
+                observation_scope_from_sql_row,
+            )?;
+            let scopes = rows.collect::<Result<Vec<_>, _>>()?;
+            Ok(StorageResponse::ObservationScopes(scopes))
+        }
+        Operation::PauseObservationScope(scope_id) => {
+            let mut scope = connection
+                .query_row(
+                    "SELECT id, source, resource_id, status, created_at, updated_at
+                     FROM observation_scopes WHERE id = ?1",
+                    params![scope_id.to_string()],
+                    observation_scope_from_sql_row,
+                )
+                .optional()?
+                .ok_or(StorageError::NotFound)?;
+            if scope.status == ObservationStatus::Active {
+                let now = OffsetDateTime::now_utc();
+                connection.execute(
+                    "UPDATE observation_scopes SET status = 'paused', updated_at = ?1
+                     WHERE id = ?2 AND status = 'active'",
+                    params![format_ts(now)?, scope_id.to_string()],
+                )?;
+                scope.status = ObservationStatus::Paused;
+                scope.updated_at = now;
+            }
+            Ok(StorageResponse::ObservationScope(scope))
         }
     }
 }
@@ -1400,6 +1616,7 @@ const fn resource_kind_name(value: ResourceKind) -> &'static str {
     match value {
         ResourceKind::File => "filesystem.file",
         ResourceKind::Directory => "filesystem.directory",
+        ResourceKind::WebPage => "web.page",
     }
 }
 
@@ -1407,8 +1624,64 @@ fn parse_resource_kind(value: &str) -> Result<ResourceKind, StorageError> {
     match value {
         "filesystem.file" => Ok(ResourceKind::File),
         "filesystem.directory" => Ok(ResourceKind::Directory),
+        "web.page" => Ok(ResourceKind::WebPage),
         _ => Err(StorageError::InvalidData("resource kind".to_owned())),
     }
+}
+
+const fn observation_source_name(value: ObservationSource) -> &'static str {
+    match value {
+        ObservationSource::BrowserChromium => "browser.chromium",
+        ObservationSource::VscodeWorkspace => "vscode.workspace",
+    }
+}
+
+fn parse_observation_source(value: &str) -> Result<ObservationSource, StorageError> {
+    match value {
+        "browser.chromium" => Ok(ObservationSource::BrowserChromium),
+        "vscode.workspace" => Ok(ObservationSource::VscodeWorkspace),
+        _ => Err(StorageError::InvalidData("observation source".to_owned())),
+    }
+}
+
+const fn observation_status_name(value: ObservationStatus) -> &'static str {
+    match value {
+        ObservationStatus::Active => "active",
+        ObservationStatus::Paused => "paused",
+    }
+}
+
+fn parse_observation_status(value: &str) -> Result<ObservationStatus, StorageError> {
+    match value {
+        "active" => Ok(ObservationStatus::Active),
+        "paused" => Ok(ObservationStatus::Paused),
+        _ => Err(StorageError::InvalidData("observation status".to_owned())),
+    }
+}
+
+fn observation_scope_from_sql_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ObservationScope> {
+    let id: String = row.get(0)?;
+    let source: String = row.get(1)?;
+    let resource_id: String = row.get(2)?;
+    let status: String = row.get(3)?;
+    let created_at: String = row.get(4)?;
+    let updated_at: String = row.get(5)?;
+    // rusqlite row mappers cannot return StorageError, so invalid persisted
+    // values are surfaced as a conversion error and never silently accepted.
+    Ok(ObservationScope {
+        id: sql_parse(parse_uuid(&id))?,
+        source: sql_parse(parse_observation_source(&source))?,
+        resource_id: sql_parse(parse_uuid(&resource_id))?,
+        status: sql_parse(parse_observation_status(&status))?,
+        created_at: sql_parse(parse_ts(&created_at))?,
+        updated_at: sql_parse(parse_ts(&updated_at))?,
+    })
+}
+
+fn sql_parse<T>(value: Result<T, StorageError>) -> rusqlite::Result<T> {
+    value.map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+    })
 }
 
 const fn sensitivity_name(value: Sensitivity) -> &'static str {
@@ -1627,6 +1900,8 @@ const fn privacy_name(privacy: PrivacyClass) -> &'static str {
 const fn event_type_name(event_type: EventType) -> &'static str {
     match event_type {
         EventType::SyntheticV1 => "dev.fubun.dev.synthetic.v1",
+        EventType::BrowserResourceOpenedV1 => "dev.fubun.browser.resource.opened.v1",
+        EventType::VscodeWorkspaceOpenedV1 => "dev.fubun.vscode.workspace.opened.v1",
     }
 }
 
@@ -1634,8 +1909,9 @@ const fn event_type_name(event_type: EventType) -> &'static str {
 mod tests {
     use super::*;
     use fubun_domain::{
-        ActionSpec, AdapterIdentity, ExecutionMode, FailureMode, RitualExecutionConfig,
-        SyntheticEventData, EVENT_SPEC_VERSION, RITUAL_SCHEMA_VERSION,
+        ActionSpec, AdapterIdentity, EventData, ExecutionMode, FailureMode, ObservationScope,
+        Resource, ResourceKind, ResourceScope, RitualExecutionConfig, Sensitivity,
+        EVENT_SPEC_VERSION, RITUAL_SCHEMA_VERSION,
     };
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -1657,7 +1933,7 @@ mod tests {
             },
             context: None,
             privacy: PrivacyClass::Normal,
-            data: SyntheticEventData {
+            data: EventData::Synthetic {
                 label: "storage-smoke".to_owned(),
                 counter: 1,
             },
@@ -1740,6 +2016,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v4_migration_normalizes_legacy_synthetic_event_data() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        fs::create_dir_all(path.parent().expect("parent")).expect("parent");
+        let connection = Connection::open(&path).expect("phase one database");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                 INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-08-03T00:00:00Z');
+                 CREATE TABLE adapters(instance_id TEXT PRIMARY KEY, adapter_id TEXT NOT NULL, adapter_version TEXT NOT NULL, last_sequence_no INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+                 CREATE TABLE settings(key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+                 CREATE TABLE events(id TEXT PRIMARY KEY, spec_version TEXT NOT NULL, event_type TEXT NOT NULL, source TEXT NOT NULL, occurred_at TEXT NOT NULL, received_at TEXT NOT NULL, actor TEXT NOT NULL, adapter_id TEXT NOT NULL, adapter_version TEXT NOT NULL, adapter_instance_id TEXT NOT NULL, sequence_no INTEGER NOT NULL, context_json TEXT, privacy TEXT NOT NULL, data_json TEXT NOT NULL, canonical_json TEXT NOT NULL, UNIQUE(adapter_instance_id, sequence_no));",
+            )
+            .expect("phase one schema");
+        let event_id = Uuid::new_v4();
+        let instance_id = Uuid::new_v4();
+        let timestamp = "2026-08-03T00:00:00Z";
+        let legacy_data = r#"{"label":"legacy","counter":1}"#;
+        let legacy_event = format!(
+            r#"{{"spec_version":"1.0","id":"{event_id}","type":"dev.fubun.dev.synthetic.v1","source":"legacy","occurred_at":"{timestamp}","received_at":"{timestamp}","actor":"user","adapter":{{"id":"dev.test","version":"0.1.0","instance_id":"{instance_id}","sequence_no":1}},"context":null,"privacy":"normal","data":{legacy_data}}}"#
+        );
+        connection
+            .execute(
+                "INSERT INTO adapters(instance_id, adapter_id, adapter_version, last_sequence_no, created_at, updated_at) VALUES (?1, 'dev.test', '0.1.0', 1, ?2, ?2)",
+                params![instance_id.to_string(), timestamp],
+            )
+            .expect("adapter");
+        connection
+            .execute(
+                "INSERT INTO events(id, spec_version, event_type, source, occurred_at, received_at, actor, adapter_id, adapter_version, adapter_instance_id, sequence_no, context_json, privacy, data_json, canonical_json) VALUES (?1, '1.0', 'dev.fubun.dev.synthetic.v1', 'legacy', ?2, ?2, 'user', 'dev.test', '0.1.0', ?3, 1, NULL, 'normal', ?4, ?5)",
+                params![event_id.to_string(), timestamp, instance_id.to_string(), legacy_data, legacy_event],
+            )
+            .expect("legacy event");
+        drop(connection);
+
+        let storage = Storage::open(&path).expect("migrate");
+        let events = storage
+            .handle()
+            .list_events(None, 10)
+            .await
+            .expect("legacy events remain readable");
+        assert!(matches!(
+            events.first().map(|event| &event.data),
+            Some(EventData::Synthetic { label, counter }) if label == "legacy" && *counter == 1
+        ));
+        storage.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
     async fn migrates_phase_two_execution_steps_with_adapter_instance_identity() {
         let temp = TempDir::new().expect("tempdir");
         let path = temp.path().join("fubun/fubun.db");
@@ -1785,6 +2110,58 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("column names");
         assert!(columns.iter().any(|column| column == "adapter_instance_id"));
+    }
+
+    #[tokio::test]
+    async fn pausing_an_observation_scope_is_idempotent() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        let storage = Storage::open(&path).expect("open storage");
+        let handle = storage.handle();
+        let now = OffsetDateTime::now_utc();
+        let resource_id = Uuid::new_v4();
+        handle
+            .create_resource(Resource {
+                id: resource_id,
+                kind: ResourceKind::WebPage,
+                label: "pause test".to_owned(),
+                locator: "https://example.com/pause".to_owned(),
+                canonical_locator: "https://example.com/pause".to_owned(),
+                sensitivity: Sensitivity::Normal,
+                scope: ResourceScope::Exact,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("resource");
+        let scope_id = Uuid::new_v4();
+        let active = handle
+            .ensure_observation_scope(ObservationScope {
+                id: scope_id,
+                source: ObservationSource::BrowserChromium,
+                resource_id,
+                status: ObservationStatus::Active,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("scope");
+        let paused = handle
+            .pause_observation_scope(scope_id)
+            .await
+            .expect("active pause");
+        let paused_again = handle
+            .pause_observation_scope(scope_id)
+            .await
+            .expect("paused pause");
+        assert_eq!(active.status, ObservationStatus::Active);
+        assert_eq!(paused.status, ObservationStatus::Paused);
+        assert_eq!(paused_again, paused);
+        assert!(matches!(
+            handle.pause_observation_scope(Uuid::new_v4()).await,
+            Err(StorageError::NotFound)
+        ));
+        storage.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]
