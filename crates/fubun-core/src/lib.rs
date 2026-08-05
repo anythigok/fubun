@@ -33,7 +33,7 @@ use fubun_protocol::{
     ResolvedResource, ResponseBody, ResponseEnvelope, ResponsePayload, RitualPreview, StatusReport,
     CURRENT_PROTOCOL_VERSION,
 };
-use fubun_storage::{Storage, StorageError, StorageHandle};
+use fubun_storage::{Storage, StorageError, StorageHandle, DISCOVERY_EVENT_SCAN_LIMIT};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::{
@@ -637,7 +637,10 @@ async fn discovery_run_response(id: Uuid, storage: &StorageHandle) -> ResponseEn
     let started_at = OffsetDateTime::now_utc();
     let run_id = Uuid::new_v4();
     let events = match storage
-        .list_events(Some(started_at - time::Duration::days(30)), 100_001)
+        .list_events_for_discovery(
+            Some(started_at - time::Duration::days(30)),
+            DISCOVERY_EVENT_SCAN_LIMIT,
+        )
         .await
     {
         Ok(events) => events,

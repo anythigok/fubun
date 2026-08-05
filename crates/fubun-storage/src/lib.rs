@@ -27,6 +27,10 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 pub const SCHEMA_VERSION: u32 = 5;
+// Keep the public response aligned with the protocol's default and well
+// below the 256 KiB IPC frame ceiling. Discovery uses its private scan API.
+pub const PUBLIC_EVENT_LIST_LIMIT: u32 = 100;
+pub const DISCOVERY_EVENT_SCAN_LIMIT: u32 = 100_001;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -83,6 +87,10 @@ pub enum StorageError {
 enum Operation {
     InsertEvent(Event),
     ListEvents {
+        since: Option<OffsetDateTime>,
+        limit: u32,
+    },
+    ListEventsForDiscovery {
         since: Option<OffsetDateTime>,
         limit: u32,
     },
@@ -280,10 +288,37 @@ impl StorageHandle {
         since: Option<OffsetDateTime>,
         limit: u32,
     ) -> Result<Vec<Event>, StorageError> {
-        match self.request(Operation::ListEvents { since, limit }).await? {
+        match self
+            .request(Operation::ListEvents {
+                since,
+                limit: limit.min(PUBLIC_EVENT_LIST_LIMIT),
+            })
+            .await?
+        {
             StorageResponse::Events(events) => Ok(events),
             _ => Err(StorageError::InvalidData(
                 "unexpected event list response".to_owned(),
+            )),
+        }
+    }
+
+    /// Returns the bounded event stream reserved for the discovery pipeline.
+    /// This operation is intentionally not exposed through the IPC request enum.
+    pub async fn list_events_for_discovery(
+        &self,
+        since: Option<OffsetDateTime>,
+        limit: u32,
+    ) -> Result<Vec<Event>, StorageError> {
+        match self
+            .request(Operation::ListEventsForDiscovery {
+                since,
+                limit: limit.min(DISCOVERY_EVENT_SCAN_LIMIT),
+            })
+            .await?
+        {
+            StorageResponse::Events(events) => Ok(events),
+            _ => Err(StorageError::InvalidData(
+                "unexpected discovery event list response".to_owned(),
             )),
         }
     }
@@ -1178,6 +1213,9 @@ fn execute_operation(
         Operation::ListEvents { since, limit } => Ok(StorageResponse::Events(list_events(
             connection, since, limit,
         )?)),
+        Operation::ListEventsForDiscovery { since, limit } => Ok(StorageResponse::Events(
+            list_events(connection, since, limit.min(DISCOVERY_EVENT_SCAN_LIMIT))?,
+        )),
         Operation::SchemaVersion => Ok(StorageResponse::SchemaVersion(current_schema_version(
             connection,
         )?)),
@@ -2808,7 +2846,7 @@ fn list_events(
          ORDER BY received_at ASC, id ASC
          LIMIT ?2",
     )?;
-    let rows = statement.query_map(params![since, i64::from(limit.min(100_001))], |row| {
+    let rows = statement.query_map(params![since, i64::from(limit)], |row| {
         row.get::<_, String>(0)
     })?;
     let serialized = rows.collect::<Result<Vec<_>, _>>()?;
@@ -2885,6 +2923,60 @@ mod tests {
         }
     }
 
+    fn insert_event_scan_fixture(path: &Path, count: u32) {
+        let connection = Connection::open(path).expect("open scan fixture");
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .expect("foreign keys");
+        let transaction = connection
+            .unchecked_transaction()
+            .expect("begin scan fixture");
+        let instance_id = Uuid::from_u128(0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa);
+        let timestamp = OffsetDateTime::now_utc();
+        let timestamp_text = format_ts(timestamp).expect("timestamp");
+        transaction
+            .execute(
+                "INSERT INTO adapters(instance_id, adapter_id, adapter_version, last_sequence_no, created_at, updated_at)
+                 VALUES (?1, 'dev.scan', '0.1.0', ?2, ?3, ?3)",
+                params![instance_id.to_string(), i64::from(count), timestamp_text],
+            )
+            .expect("adapter fixture");
+        for sequence in 1..=count {
+            let mut fixture = event(instance_id);
+            fixture.id = Uuid::from_u128(u128::from(sequence));
+            fixture.received_at = timestamp + time::Duration::seconds(i64::from(sequence));
+            fixture.occurred_at = fixture.received_at;
+            fixture.adapter.id = "dev.scan".to_owned();
+            fixture.adapter.sequence_no = u64::from(sequence);
+            let occurred_at = format_ts(fixture.occurred_at).expect("occurred_at");
+            let received_at = format_ts(fixture.received_at).expect("received_at");
+            let data_json = serde_json::to_string(&fixture.data).expect("data");
+            let canonical_json = serde_json::to_string(&fixture).expect("canonical");
+            transaction
+                .execute(
+                    "INSERT INTO events(
+                        id, spec_version, event_type, source, occurred_at, received_at, actor,
+                        adapter_id, adapter_version, adapter_instance_id, sequence_no,
+                        context_json, privacy, data_json, canonical_json
+                    ) VALUES (?1, ?2, 'dev.fubun.dev.synthetic.v1', ?3, ?4, ?5, 'user',
+                        'dev.scan', '0.1.0', ?6, ?7, NULL, 'normal', ?8, ?9)",
+                    params![
+                        fixture.id.to_string(),
+                        EVENT_SPEC_VERSION,
+                        fixture.source,
+                        occurred_at,
+                        received_at,
+                        instance_id.to_string(),
+                        i64::from(sequence),
+                        data_json,
+                        canonical_json,
+                    ],
+                )
+                .expect("event fixture");
+        }
+        transaction.commit().expect("commit scan fixture");
+    }
+
     #[tokio::test]
     async fn persists_across_restart_and_rejects_duplicate() {
         let temp = TempDir::new().expect("tempdir");
@@ -2911,6 +3003,43 @@ mod tests {
             .await
             .expect("list events");
         assert_eq!(events.len(), 1);
+        reopened.shutdown().await.expect("shutdown reopened");
+    }
+
+    #[tokio::test]
+    async fn public_event_list_is_bounded_and_discovery_scan_is_private_and_large() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("fubun/fubun.db");
+        let storage = Storage::open(&path).expect("open storage");
+        storage.shutdown().await.expect("shutdown before fixture");
+        insert_event_scan_fixture(&path, DISCOVERY_EVENT_SCAN_LIMIT);
+
+        let reopened = Storage::open(&path).expect("reopen storage");
+        let handle = reopened.handle();
+        let public = handle
+            .list_events(None, DISCOVERY_EVENT_SCAN_LIMIT)
+            .await
+            .expect("public event list");
+        assert_eq!(
+            public.len(),
+            usize::try_from(PUBLIC_EVENT_LIST_LIMIT).unwrap()
+        );
+        let discovery = handle
+            .list_events_for_discovery(None, DISCOVERY_EVENT_SCAN_LIMIT)
+            .await
+            .expect("discovery event list");
+        assert_eq!(
+            discovery.len(),
+            usize::try_from(DISCOVERY_EVENT_SCAN_LIMIT).unwrap()
+        );
+        let discovery_below_limit = handle
+            .list_events_for_discovery(None, DISCOVERY_EVENT_SCAN_LIMIT - 1)
+            .await
+            .expect("bounded discovery event list");
+        assert_eq!(
+            discovery_below_limit.len(),
+            usize::try_from(DISCOVERY_EVENT_SCAN_LIMIT - 1).unwrap()
+        );
         reopened.shutdown().await.expect("shutdown reopened");
     }
 

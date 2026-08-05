@@ -172,3 +172,18 @@ PR #2 head `fe7bac2187415ee6f1954f6db9229622a6c2f6c3` の再現確認では、Br
 - [x] Observation Pauseをactive→paused／paused→paused成功の冪等操作へ変更し、Browser/VS Codeの再送を可能にした
 - [x] Adapter接続ごとにopaqueな`ConnectionToken`を発行し、`disconnect_if_current`で旧接続の終了が新接続を削除しないようにした
 - [x] 接続置換時は旧Tokenに属するPending ActionだけをDisconnectedで解放し、新接続のPendingを保持する回帰Testを追加した
+
+### Phase 4A PR #3 dogfooding hardening
+
+PR #3 head `478547a7f83ea64e1b5ce6476e7501c66f2c2379` の再現確認では、Browserの自己生成Tab抑止が全Tabを
+`chrome.storage.session`の一つのObjectへRead-Modify-Writeしていたため、同時ActionでLost Updateが起こり得た。
+`createPreparedTab()`がTab IDを返さない場合も`opened`を返し、Discoveryが公開`list_events`へ100001件上限を要求して
+通常ClientのResponse境界を拡張していた。
+
+- [x] Tabごとの独立Session Key、同一Tabの直列化、URL/complete両Callbackを抑止する短命Tombstoneを実装
+- [x] 不正または未返却のPrepared Tab IDを`tab_id_unavailable`として失敗させ、Navigation/Suppressionを実行しない回帰Testを追加
+- [x] 公開Event Listを100件へ固定し、Discovery専用の内部Single Writer Scan（最大100001件）を追加
+- [x] 100001件Fixtureで公開ListとDiscovery Scanの上限・順序を検証し、Discovery Coreが専用Operationだけを使うよう変更
+
+合理的仮定: 公開`events.list`はIPC 256KiB境界を安全側に保つためProtocol既定値と同じ100件を上限とし、
+100001件の大規模ScanはDiscovery内部だけで使用する。Suppressionのcomplete Tombstoneは5秒または元の期限まで保持する。

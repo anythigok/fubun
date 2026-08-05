@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BrowserIntegration } from "../dist/integration.js";
+import { BrowserIntegration, createSessionSuppressionStore } from "../dist/integration.js";
 import { BrowserNativeBridge } from "../dist/native-bridge.js";
 
 const BROWSER_MAPPING_SCHEMA_VERSION = "dev.fubun.browser-mapping/1";
@@ -304,6 +304,32 @@ test("browser action skips an existing tab and opens a missing registered tab", 
   assert.equal(native.notifications[1].payload.result.result_code, "opened");
 });
 
+test("browser action treats a missing prepared tab id as a failure", async () => {
+  const active = await mapping();
+  let navigated = false;
+  let marked = false;
+  const suppression = { async mark() { marked = true; }, async consume() { return false; } };
+  const { browser, integration, native } = fixture({ initial: [active], suppression });
+  browser.createPreparedTab = async () => undefined;
+  browser.navigateTab = async () => { navigated = true; };
+  await integration.handleActionExecute({
+    protocol_version: PROTOCOL_VERSION,
+    request_id: actionId,
+    type: "browser.action.execute",
+    payload: {
+      request_id: actionId,
+      action_execution_id: "44444444-4444-4444-8444-444444444444",
+      action: { type: "browser.tab.ensure_open.v1", resource_id: resourceId },
+      resolved_resource: { resource_id: resourceId, kind: "web.page", canonical_locator: "https://example.com/page" },
+    },
+  });
+  assert.equal(navigated, false);
+  assert.equal(marked, false);
+  assert.equal(native.notifications[0].payload.result.status, "failed");
+  assert.equal(native.notifications[0].payload.result.result_code, "tab_id_unavailable");
+  assert.equal(native.notifications[0].payload.result.redacted_message, "browser did not return a usable tab identifier");
+});
+
 test("self-generated browser tab navigation is suppressed once and expires safely", async () => {
   const active = await mapping();
   const entries = new Map();
@@ -365,13 +391,13 @@ test("self-generated suppression is stored before a registered URL is navigated"
 
 test("URL and complete callbacks both consume one self-generated navigation", async () => {
   const active = await mapping();
-  const entries = new Map([[42, { resourceId, expiresAt: 2_000 }]]);
+  const entries = new Map([[42, { resourceId, expiresAt: 10_000, phase: "awaiting_complete" }]]);
   const suppression = {
-    async mark(tabId, id, expiresAt) { entries.set(tabId, { resourceId: id, expiresAt }); },
+    async mark(tabId, id, expiresAt) { entries.set(tabId, { resourceId: id, expiresAt, phase: "awaiting_complete" }); },
     async consume(tabId, id, now, phase = "complete") {
       const entry = entries.get(tabId);
       if (entry === undefined || entry.resourceId !== id || entry.expiresAt < now) return false;
-      if (phase === "complete") entries.delete(tabId);
+      if (phase === "complete") entry.phase = "completed";
       return true;
     },
   };
@@ -379,8 +405,9 @@ test("URL and complete callbacks both consume one self-generated navigation", as
   native.responses.set("browser.event.emit", { event_id: actionId, stored: true, duplicate: false });
   await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false, navigationPhase: "url" });
   await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false, navigationPhase: "complete" });
+  await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false, navigationPhase: "complete" });
   assert.equal(native.calls.filter((call) => call.type === "browser.event.emit").length, 0);
-  assert.equal(entries.has(42), false);
+  assert.equal(entries.has(42), true);
 });
 
 test("suppression entries with a different resource are not consumed", async () => {
@@ -400,6 +427,54 @@ test("suppression entries with a different resource are not consumed", async () 
   await integration.onNavigation({ id: 42, url: "https://example.com/page", incognito: false });
   assert.equal(entries.has(42), true);
   assert.equal(native.calls.filter((call) => call.type === "browser.event.emit").length, 1);
+});
+
+class FakeSessionStorage {
+  constructor() { this.values = new Map(); }
+  async get(key) {
+    return this.values.has(key) ? { [key]: this.values.get(key) } : {};
+  }
+  async set(items) {
+    for (const [key, value] of Object.entries(items)) this.values.set(key, value);
+  }
+  async remove(key) { this.values.delete(key); }
+}
+
+test("per-tab suppression keys preserve concurrent marks and unrelated updates", async () => {
+  const storage = new FakeSessionStorage();
+  const suppression = createSessionSuppressionStore(storage);
+  const otherResource = "66666666-6666-4666-8666-666666666666";
+  await Promise.all([
+    suppression.mark(41, resourceId, 10_000),
+    suppression.mark(42, otherResource, 10_000),
+  ]);
+  assert.equal(storage.values.size, 2);
+  const [consumed] = await Promise.all([
+    suppression.consume(41, resourceId, 1_000, "complete"),
+    suppression.mark(43, resourceId, 10_000),
+  ]);
+  assert.equal(consumed, true);
+  assert.equal(storage.values.has("fubun.self-generated-tab.42"), true);
+  assert.equal(storage.values.has("fubun.self-generated-tab.43"), true);
+});
+
+test("per-tab suppression keeps completed tombstones across duplicate callbacks and expires them", async () => {
+  const storage = new FakeSessionStorage();
+  const suppression = createSessionSuppressionStore(storage);
+  await suppression.mark(44, resourceId, 10_000);
+  assert.equal(await suppression.consume(44, resourceId, 1_000, "url"), true);
+  assert.equal(await suppression.consume(44, resourceId, 1_001, "complete"), true);
+  assert.equal(await suppression.consume(44, resourceId, 1_002, "complete"), true);
+  assert.equal(await suppression.consume(44, resourceId, 10_001, "complete"), false);
+  assert.equal(storage.values.has("fubun.self-generated-tab.44"), false);
+});
+
+test("resource mismatch never consumes an independent suppression entry", async () => {
+  const storage = new FakeSessionStorage();
+  const suppression = createSessionSuppressionStore(storage);
+  await suppression.mark(45, resourceId, 10_000);
+  assert.equal(await suppression.consume(45, "66666666-6666-4666-8666-666666666666", 1_000, "complete"), false);
+  assert.equal(storage.values.has("fubun.self-generated-tab.45"), true);
 });
 
 class FakePort {
