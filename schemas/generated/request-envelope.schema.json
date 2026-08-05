@@ -1008,6 +1008,186 @@
               "$ref": "#/definitions/EmptyRequest"
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "discovery.run"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "discovery.status"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/EmptyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "sessions.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SessionsListRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.show"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SessionIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "suggestions.list"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SuggestionsListRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "suggestion.show"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SuggestionIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "suggestion.snooze"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SuggestionSnoozeRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "suggestion.dismiss"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SuggestionIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "suggestion.block"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SuggestionIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "suggestion.accept"
+              ]
+            },
+            "params": {
+              "$ref": "#/definitions/SuggestionAcceptRequest"
+            }
+          }
         }
       ]
     },
@@ -1158,6 +1338,118 @@
         "normal",
         "sensitive"
       ]
+    },
+    "SessionIdRequest": {
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionsListRequest": {
+      "type": "object",
+      "properties": {
+        "workspace_resource_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionAcceptRequest": {
+      "type": "object",
+      "required": [
+        "suggestion_id"
+      ],
+      "properties": {
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suggestion_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionIdRequest": {
+      "type": "object",
+      "required": [
+        "suggestion_id"
+      ],
+      "properties": {
+        "suggestion_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionSnoozeRequest": {
+      "type": "object",
+      "required": [
+        "for_duration",
+        "suggestion_id"
+      ],
+      "properties": {
+        "for_duration": {
+          "type": "string"
+        },
+        "suggestion_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "snoozed",
+        "dismissed",
+        "accepted",
+        "blocked"
+      ]
+    },
+    "SuggestionsListRequest": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SuggestionStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_resource_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
     },
     "VscodeObservationEnableRequest": {
       "type": "object",

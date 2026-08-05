@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DiscoveredSession",
+  "type": "object",
+  "required": [
+    "algorithm_version",
+    "anchor_event_id",
+    "eligible",
+    "event_count",
+    "events",
+    "id",
+    "kind",
+    "started_at",
+    "workspace_resource_id"
+  ],
+  "properties": {
+    "algorithm_version": {
+      "type": "string"
+    },
+    "anchor_event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eligible": {
+      "type": "boolean"
+    },
+    "event_count": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SessionEvent"
+      }
+    },
+    "finished_at": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "workspace_resource_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "SessionEvent": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "is_anchor",
+        "ordinal",
+        "received_at",
+        "resource_id"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "is_anchor": {
+          "type": "boolean"
+        },
+        "ordinal": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "received_at": {
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

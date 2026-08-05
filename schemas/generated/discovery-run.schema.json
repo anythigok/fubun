@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DiscoveryRun",
+  "type": "object",
+  "required": [
+    "algorithm_version",
+    "candidates_evaluated",
+    "id",
+    "input_event_count",
+    "sessions_upserted",
+    "started_at",
+    "status",
+    "suggestions_created"
+  ],
+  "properties": {
+    "algorithm_version": {
+      "type": "string"
+    },
+    "candidates_evaluated": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "failure_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "finished_at": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "input_event_count": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "sessions_upserted": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/DiscoveryRunStatus"
+    },
+    "suggestions_created": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "DiscoveryRunStatus": {
+      "type": "string",
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "aborted"
+      ]
+    }
+  }
+}

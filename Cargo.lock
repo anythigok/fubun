@@ -299,6 +299,7 @@ dependencies = [
  "clap",
  "fubun-core",
  "fubun-domain",
+ "fubun-mining",
  "fubun-protocol",
  "serde_json",
  "thiserror",
@@ -312,6 +313,7 @@ name = "fubun-core"
 version = "0.1.0"
 dependencies = [
  "fubun-domain",
+ "fubun-mining",
  "fubun-policy",
  "fubun-protocol",
  "fubun-storage",
@@ -364,6 +366,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fubun-mining"
+version = "0.1.0"
+dependencies = [
+ "fubun-domain",
+ "proptest",
+ "schemars",
+ "serde",
+ "sha2",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "fubun-native-host"
 version = "0.1.0"
 dependencies = [
@@ -394,6 +409,7 @@ name = "fubun-protocol"
 version = "0.1.0"
 dependencies = [
  "fubun-domain",
+ "fubun-mining",
  "proptest",
  "schemars",
  "serde",
@@ -409,6 +425,7 @@ name = "fubun-storage"
 version = "0.1.0"
 dependencies = [
  "fubun-domain",
+ "fubun-mining",
  "rusqlite",
  "serde_json",
  "tempfile",
@@ -862,6 +879,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1161,6 +1184,7 @@ checksum = "458f7a779bf54acc9f347480ac654f68407d3aab21269a6e3c9f922acd9e2da9"
 dependencies = [
  "getrandom",
  "serde",
+ "sha1_smol",
 ]
 
 [[package]]

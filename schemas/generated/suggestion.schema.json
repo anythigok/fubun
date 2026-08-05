@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DiscoveredSuggestion",
+  "type": "object",
+  "required": [
+    "action_resource_ids",
+    "algorithm_version",
+    "confidence_basis_points",
+    "eligible_sessions",
+    "first_seen_at",
+    "id",
+    "last_seen_at",
+    "median_completion_ms",
+    "observation_span_seconds",
+    "pattern_fingerprint",
+    "support_sessions",
+    "supporting_session_ids",
+    "workspace_resource_id"
+  ],
+  "properties": {
+    "action_resource_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "algorithm_version": {
+      "type": "string"
+    },
+    "confidence_basis_points": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "eligible_sessions": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "first_seen_at": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "last_seen_at": {
+      "type": "string"
+    },
+    "median_completion_ms": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "observation_span_seconds": {
+      "type": "integer",
+      "format": "int64"
+    },
+    "pattern_fingerprint": {
+      "type": "string"
+    },
+    "support_sessions": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "supporting_session_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "workspace_resource_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false
+}

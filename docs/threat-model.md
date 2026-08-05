@@ -6,6 +6,27 @@
 
 ## Threats and mitigations
 
+### Phase 4A discovery boundaries
+
+Discovery accepts only Core-validated `actor=user` VS Code Workspace Opened and Browser
+Resource Opened events. Synthetic, system, imported, Fubun-generated, inactive-scope, unknown,
+and resource-missing events are excluded before Sessionization. Event order uses daemon
+`received_at`; `occurred_at` cannot reorder a Session.
+
+Sessions contain Resource IDs and event IDs only. Evidence and Fingerprints contain algorithm
+version, workspace Resource ID, ordered action Resource IDs, counts, timestamps, and bounded
+statistics. Raw URL, raw Workspace Path, browser title, query, fragment, cookie, tab ID, and file
+contents are not representable in discovery records.
+
+Discovery is an explicit CLI/IPC request with a 30-day and 100,000-event bound and a single-flight
+guard. There is no background scheduler, machine learning model, LLM, suggestion notification,
+automatic activation, or automatic execution. Accepting a Suggestion is transactional and creates
+only a Draft Ritual; it never creates an Approval or Rule.
+
+Browser tabs opened by a Fubun Action are suppressed from one subsequent navigation using an
+ephemeral, 60-second session-store entry keyed by tab ID and Resource ID. The entry is consumed
+once and is never sent to Core or persisted in SQLite. Expiry prevents permanent suppression.
+
 ### Malicious IPC Client
 
 同一ユーザー権限を得たclientが不正requestを送る可能性があります。最初のrequestに `client.hello` または `adapter.hello` を要求し、protocol major、strict envelope、Domain validationを確認します。権限・認証の追加は将来ADR対象です。

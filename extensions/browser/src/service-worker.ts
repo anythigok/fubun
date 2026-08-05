@@ -4,7 +4,7 @@ import {
   isUuid,
   rejectUnknownKeys,
 } from "@fubun/protocol-ts";
-import { BrowserIntegration, BrowserTab, MappingStore } from "./integration.js";
+import { BrowserIntegration, BrowserTab, MappingStore, NavigationPhase, SessionSuppressionStorage, createSessionSuppressionStore } from "./integration.js";
 import { BrowserNativeBridge, NativePort } from "./native-bridge.js";
 
 const HOST = "dev.fubun.browser";
@@ -20,6 +20,19 @@ const store: MappingStore = {
     await chrome.storage.local.set({ [mappingsKey]: mappings });
   },
 };
+
+const sessionStorage: SessionSuppressionStorage = {
+  async get(key): Promise<Record<string, unknown>> {
+    return await chrome.storage.session.get(key) as Record<string, unknown>;
+  },
+  async set(items): Promise<void> {
+    await chrome.storage.session.set(items);
+  },
+  async remove(key): Promise<void> {
+    await chrome.storage.session.remove(key);
+  },
+};
+const suppression = createSessionSuppressionStore(sessionStorage);
 
 let integration: BrowserIntegration;
 const bridge = new BrowserNativeBridge({
@@ -39,8 +52,12 @@ integration = new BrowserIntegration({
         .map(tabFromChrome)
         .filter((tab): tab is BrowserTab => tab !== undefined);
     },
-    async createTab(url: string): Promise<void> {
-      await chrome.tabs.create({ url, active: true });
+    async createPreparedTab(): Promise<number | undefined> {
+      const tab = await chrome.tabs.create({ url: "about:blank", active: true });
+      return tab.id;
+    },
+    async navigateTab(tabId: number, url: string): Promise<void> {
+      await chrome.tabs.update(tabId, { url });
     },
     async permissionGranted(origin: string): Promise<boolean> {
       return chrome.permissions.contains({ origins: [origin] });
@@ -50,6 +67,7 @@ integration = new BrowserIntegration({
   native: bridge,
   extensionId: () => chrome.runtime.id,
   extensionVersion: () => chrome.runtime.getManifest().version,
+  suppression,
 });
 
 function createNativePort(): NativePort {
@@ -128,7 +146,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" && changeInfo.url === undefined) return;
   const mapped = tabFromChrome(tab);
   if (mapped === undefined) return;
-  void integration.onNavigation({ ...mapped, id: tabId }).catch(() => undefined);
+  const navigationPhase: NavigationPhase = changeInfo.status === "complete" ? "complete" : "url";
+  void integration.onNavigation({ ...mapped, id: tabId, navigationPhase }).catch(() => undefined);
 });
 
 chrome.permissions.onRemoved.addListener((permissions) => {

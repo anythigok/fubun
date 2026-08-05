@@ -15,10 +15,14 @@ use adapter::{
 };
 use fubun_domain::{
     canonical_web_url_hash, canonicalize_web_url, web_origin_pattern, ActionSpec, Actor,
-    AdapterIdentity, Approval, EventData, EventType, Execution, ExecutionStatus, ExecutionStep,
-    ExecutionStepStatus, ObservationScope, ObservationSource, ObservationStatus, PrivacyClass,
-    Resource, ResourceKind, ResourceScope, Ritual, RitualDefinition, RitualStatus, RitualVersion,
-    TriggerKind, EVENT_SPEC_VERSION, RITUAL_SCHEMA_VERSION,
+    AdapterIdentity, Approval, EventData, EventType, Execution, ExecutionMode, ExecutionStatus,
+    ExecutionStep, ExecutionStepStatus, FailureMode, ObservationScope, ObservationSource,
+    ObservationStatus, PrivacyClass, Resource, ResourceKind, ResourceScope, Ritual,
+    RitualDefinition, RitualStatus, RitualVersion, TriggerKind, EVENT_SPEC_VERSION,
+    RITUAL_SCHEMA_VERSION,
+};
+use fubun_mining::{
+    self, DiscoveryInput, DiscoveryRun, DiscoveryRunStatus, SuggestionStatus, ALGORITHM_VERSION,
 };
 use fubun_policy::{approval_fields, descriptor, validate_action};
 use fubun_protocol::{
@@ -29,7 +33,7 @@ use fubun_protocol::{
     ResolvedResource, ResponseBody, ResponseEnvelope, ResponsePayload, RitualPreview, StatusReport,
     CURRENT_PROTOCOL_VERSION,
 };
-use fubun_storage::{Storage, StorageError, StorageHandle};
+use fubun_storage::{Storage, StorageError, StorageHandle, DISCOVERY_EVENT_SCAN_LIMIT};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::{
@@ -110,6 +114,7 @@ pub async fn start_server(paths: FubunPaths) -> Result<RunningServer, CoreError>
     remove_stale_socket(&paths.socket_path)?;
     let storage = Storage::open(&paths.database_path)?;
     storage.handle().abort_running_executions().await?;
+    storage.handle().abort_running_discovery_runs().await?;
     let listener = UnixListener::bind(&paths.socket_path)?;
     fs::set_permissions(&paths.socket_path, fs::Permissions::from_mode(0o600))?;
 
@@ -546,6 +551,410 @@ async fn process_request(
                 }),
             )
         }
+        RequestBody::DiscoveryRun(_) => discovery_run_response(id, storage).await,
+        RequestBody::DiscoveryStatus(_) => discovery_status_response(id, storage).await,
+        RequestBody::SessionsList(payload) => {
+            match storage.list_sessions(payload.workspace_resource_id).await {
+                Ok(sessions) => ResponseEnvelope::ok(
+                    id,
+                    ResponsePayload::SessionsList(fubun_protocol::SessionsList { sessions }),
+                ),
+                Err(error) => storage_error(id, error),
+            }
+        }
+        RequestBody::SessionShow(payload) => match storage.get_session(payload.session_id).await {
+            Ok(session) => ResponseEnvelope::ok(
+                id,
+                ResponsePayload::SessionShow(fubun_protocol::SessionShow { session }),
+            ),
+            Err(StorageError::SessionNotFound) => {
+                ResponseEnvelope::error(id, "session_not_found", "session was not found")
+            }
+            Err(error) => storage_error(id, error),
+        },
+        RequestBody::SuggestionsList(payload) => match storage
+            .list_suggestions(payload.status, payload.workspace_resource_id)
+            .await
+        {
+            Ok(suggestions) => ResponseEnvelope::ok(
+                id,
+                ResponsePayload::SuggestionsList(fubun_protocol::SuggestionsList { suggestions }),
+            ),
+            Err(error) => storage_error(id, error),
+        },
+        RequestBody::SuggestionShow(payload) => match storage
+            .get_suggestion(payload.suggestion_id)
+            .await
+        {
+            Ok((suggestion, status, snoozed_until, accepted_ritual_id)) => ResponseEnvelope::ok(
+                id,
+                ResponsePayload::SuggestionShow(fubun_protocol::SuggestionShow {
+                    suggestion,
+                    status,
+                    snoozed_until: snoozed_until.map(|value| {
+                        value
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .unwrap_or_default()
+                    }),
+                    accepted_ritual_id,
+                }),
+            ),
+            Err(StorageError::SuggestionNotFound) => {
+                ResponseEnvelope::error(id, "suggestion_not_found", "suggestion was not found")
+            }
+            Err(error) => storage_error(id, error),
+        },
+        RequestBody::SuggestionSnooze(payload) => {
+            suggestion_snooze_response(id, payload, storage).await
+        }
+        RequestBody::SuggestionDismiss(payload) => {
+            suggestion_state_response(
+                id,
+                payload.suggestion_id,
+                SuggestionStatus::Dismissed,
+                Some(OffsetDateTime::now_utc() + time::Duration::days(30)),
+                storage,
+            )
+            .await
+        }
+        RequestBody::SuggestionBlock(payload) => {
+            suggestion_state_response(
+                id,
+                payload.suggestion_id,
+                SuggestionStatus::Blocked,
+                None,
+                storage,
+            )
+            .await
+        }
+        RequestBody::SuggestionAccept(payload) => {
+            suggestion_accept_response(id, payload, storage).await
+        }
+    }
+}
+
+async fn discovery_run_response(id: Uuid, storage: &StorageHandle) -> ResponseEnvelope {
+    let started_at = OffsetDateTime::now_utc();
+    let run_id = Uuid::new_v4();
+    let events = match storage
+        .list_events_for_discovery(
+            Some(started_at - time::Duration::days(30)),
+            DISCOVERY_EVENT_SCAN_LIMIT,
+        )
+        .await
+    {
+        Ok(events) => events,
+        Err(error) => return storage_error(id, error),
+    };
+    if events.len() > 100_000 {
+        return ResponseEnvelope::error(
+            id,
+            "discovery_input_too_large",
+            "discovery input exceeds the maximum event count",
+        );
+    }
+    let run = DiscoveryRun {
+        id: run_id,
+        algorithm_version: ALGORITHM_VERSION.to_owned(),
+        status: DiscoveryRunStatus::Running,
+        started_at,
+        finished_at: None,
+        input_event_count: events.len() as u32,
+        sessions_upserted: 0,
+        candidates_evaluated: 0,
+        suggestions_created: 0,
+        failure_code: None,
+    };
+    if let Err(error) = storage.start_discovery_run(run.clone()).await {
+        return storage_error(id, error);
+    }
+    let resources = match storage.list_resources().await {
+        Ok(resources) => resources,
+        Err(_error) => {
+            return finish_failed_discovery(id, storage, run_id, "resource_load_failed").await
+        }
+    };
+    let scopes = match storage.list_observation_scopes(None).await {
+        Ok(scopes) => scopes,
+        Err(_error) => {
+            return finish_failed_discovery(id, storage, run_id, "scope_load_failed").await
+        }
+    };
+    let output = fubun_mining::discover(DiscoveryInput {
+        events,
+        resources,
+        scopes,
+    });
+    let mut run = run;
+    run.candidates_evaluated = output.candidates_evaluated;
+    match storage
+        .persist_discovery(run, output.sessions, output.suggestions)
+        .await
+    {
+        Ok(run) => ResponseEnvelope::ok(
+            id,
+            ResponsePayload::DiscoveryRun(fubun_protocol::DiscoveryRunReport { run }),
+        ),
+        Err(_error) => finish_failed_discovery(id, storage, run_id, "persistence_failed").await,
+    }
+}
+
+async fn finish_failed_discovery(
+    request_id: Uuid,
+    storage: &StorageHandle,
+    run_id: Uuid,
+    failure_code: &str,
+) -> ResponseEnvelope {
+    // Finalization is best effort, but is attempted before returning the
+    // public error so a failed request can never strand a run as `running`.
+    let _ = storage
+        .finish_discovery_run_failed(run_id, failure_code, OffsetDateTime::now_utc())
+        .await;
+    ResponseEnvelope::error(request_id, "discovery_failed", "discovery run failed")
+}
+
+async fn discovery_status_response(id: Uuid, storage: &StorageHandle) -> ResponseEnvelope {
+    match storage.list_discovery_runs().await {
+        Ok(mut runs) => {
+            let run = runs.drain(..).next().unwrap_or(DiscoveryRun {
+                id: Uuid::nil(),
+                algorithm_version: ALGORITHM_VERSION.to_owned(),
+                status: DiscoveryRunStatus::Aborted,
+                started_at: OffsetDateTime::UNIX_EPOCH,
+                finished_at: None,
+                input_event_count: 0,
+                sessions_upserted: 0,
+                candidates_evaluated: 0,
+                suggestions_created: 0,
+                failure_code: None,
+            });
+            ResponseEnvelope::ok(
+                id,
+                ResponsePayload::DiscoveryStatus(fubun_protocol::DiscoveryRunReport { run }),
+            )
+        }
+        Err(error) => storage_error(id, error),
+    }
+}
+
+fn parse_discovery_duration(value: &str) -> Result<time::Duration, ()> {
+    let (number, suffix) = value.split_at(value.len().saturating_sub(1));
+    let amount: i64 = number.parse().map_err(|_| ())?;
+    if amount <= 0 {
+        return Err(());
+    }
+    match suffix {
+        "d" => Ok(time::Duration::days(amount)),
+        "h" => Ok(time::Duration::hours(amount)),
+        "m" => Ok(time::Duration::minutes(amount)),
+        _ => Err(()),
+    }
+}
+
+async fn suggestion_snooze_response(
+    id: Uuid,
+    payload: fubun_protocol::SuggestionSnoozeRequest,
+    storage: &StorageHandle,
+) -> ResponseEnvelope {
+    let duration = match parse_discovery_duration(&payload.for_duration) {
+        Ok(duration) if duration <= time::Duration::days(90) => duration,
+        _ => {
+            return ResponseEnvelope::error(
+                id,
+                "invalid_snooze_duration",
+                "snooze duration must be between 1m and 90d",
+            )
+        }
+    };
+    suggestion_state_response(
+        id,
+        payload.suggestion_id,
+        SuggestionStatus::Snoozed,
+        Some(OffsetDateTime::now_utc() + duration),
+        storage,
+    )
+    .await
+}
+
+async fn suggestion_state_response(
+    id: Uuid,
+    suggestion_id: Uuid,
+    status: SuggestionStatus,
+    until: Option<OffsetDateTime>,
+    storage: &StorageHandle,
+) -> ResponseEnvelope {
+    match storage
+        .set_suggestion_status(suggestion_id, status, until)
+        .await
+    {
+        Ok((suggestion, status, snoozed_until, accepted_ritual_id)) => ResponseEnvelope::ok(
+            id,
+            match status {
+                SuggestionStatus::Snoozed => {
+                    ResponsePayload::SuggestionSnoozed(fubun_protocol::SuggestionShow {
+                        suggestion,
+                        status,
+                        snoozed_until: snoozed_until.map(|value| {
+                            value
+                                .format(&time::format_description::well_known::Rfc3339)
+                                .unwrap_or_default()
+                        }),
+                        accepted_ritual_id,
+                    })
+                }
+                SuggestionStatus::Dismissed => {
+                    ResponsePayload::SuggestionDismissed(fubun_protocol::SuggestionShow {
+                        suggestion,
+                        status,
+                        snoozed_until: snoozed_until.map(|value| {
+                            value
+                                .format(&time::format_description::well_known::Rfc3339)
+                                .unwrap_or_default()
+                        }),
+                        accepted_ritual_id,
+                    })
+                }
+                SuggestionStatus::Blocked => {
+                    ResponsePayload::SuggestionBlocked(fubun_protocol::SuggestionShow {
+                        suggestion,
+                        status,
+                        snoozed_until: snoozed_until.map(|value| {
+                            value
+                                .format(&time::format_description::well_known::Rfc3339)
+                                .unwrap_or_default()
+                        }),
+                        accepted_ritual_id,
+                    })
+                }
+                _ => ResponsePayload::SuggestionShow(fubun_protocol::SuggestionShow {
+                    suggestion,
+                    status,
+                    snoozed_until: snoozed_until.map(|value| {
+                        value
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .unwrap_or_default()
+                    }),
+                    accepted_ritual_id,
+                }),
+            },
+        ),
+        Err(StorageError::SuggestionNotFound) => {
+            ResponseEnvelope::error(id, "suggestion_not_found", "suggestion was not found")
+        }
+        Err(StorageError::SuggestionInvalidState) => ResponseEnvelope::error(
+            id,
+            "suggestion_invalid_state",
+            "suggestion state does not allow this operation",
+        ),
+        Err(error) => storage_error(id, error),
+    }
+}
+
+async fn suggestion_accept_response(
+    id: Uuid,
+    payload: fubun_protocol::SuggestionAcceptRequest,
+    storage: &StorageHandle,
+) -> ResponseEnvelope {
+    let (suggestion, status, _, accepted_ritual) = match storage
+        .get_suggestion(payload.suggestion_id)
+        .await
+    {
+        Ok(value) => value,
+        Err(StorageError::SuggestionNotFound) => {
+            return ResponseEnvelope::error(id, "suggestion_not_found", "suggestion was not found")
+        }
+        Err(error) => return storage_error(id, error),
+    };
+    if status == SuggestionStatus::Accepted {
+        if let Some(ritual_id) = accepted_ritual {
+            return ritual_show_response(id, ritual_id, storage).await;
+        }
+    }
+    let workspace = match storage.get_resource(suggestion.workspace_resource_id).await {
+        Ok(resource) => resource,
+        Err(_) => {
+            return ResponseEnvelope::error(
+                id,
+                "suggestion_stale",
+                "workspace resource is no longer available",
+            )
+        }
+    };
+    let name = payload
+        .name
+        .unwrap_or_else(|| format!("Open resources for {}", workspace.label));
+    let definition = RitualDefinition {
+        schema_version: RITUAL_SCHEMA_VERSION.to_owned(),
+        name,
+        actions: suggestion
+            .action_resource_ids
+            .iter()
+            .map(|resource_id| ActionSpec::BrowserTabEnsureOpen {
+                resource_id: *resource_id,
+            })
+            .collect(),
+        execution: fubun_domain::RitualExecutionConfig {
+            mode: ExecutionMode::Sequential,
+            on_failure: FailureMode::Stop,
+            timeout_seconds: 30,
+        },
+    };
+    let canonical = match validate_ritual_definition(&definition) {
+        Ok(value) => value,
+        Err(message) => return ResponseEnvelope::error(id, "invalid_ritual", message),
+    };
+    let content_hash = match definition.content_hash() {
+        Ok(value) => value,
+        Err(_) => {
+            return ResponseEnvelope::error(
+                id,
+                "internal_error",
+                "ritual hash could not be computed",
+            )
+        }
+    };
+    let now = OffsetDateTime::now_utc();
+    let ritual_id = Uuid::new_v4();
+    let version = RitualVersion {
+        id: Uuid::new_v4(),
+        ritual_id,
+        version: 1,
+        schema_version: RITUAL_SCHEMA_VERSION.to_owned(),
+        canonical_json: canonical,
+        content_hash,
+        created_at: now,
+    };
+    let ritual = Ritual {
+        id: ritual_id,
+        name: definition.name.clone(),
+        status: RitualStatus::Draft,
+        current_version_id: version.id,
+        created_at: now,
+        updated_at: now,
+    };
+    match storage
+        .accept_suggestion(payload.suggestion_id, ritual, version, definition)
+        .await
+    {
+        Ok((ritual, version, definition)) => ResponseEnvelope::ok(
+            id,
+            ResponsePayload::SuggestionAccepted(fubun_protocol::RitualRecord {
+                ritual,
+                version,
+                definition,
+            }),
+        ),
+        Err(StorageError::SuggestionStale) => ResponseEnvelope::error(
+            id,
+            "suggestion_stale",
+            "suggestion resources or scopes are no longer active",
+        ),
+        Err(StorageError::SuggestionInvalidState) => ResponseEnvelope::error(
+            id,
+            "suggestion_invalid_state",
+            "suggestion cannot be accepted in its current state",
+        ),
+        Err(error) => storage_error(id, error),
     }
 }
 
@@ -1872,6 +2281,23 @@ fn storage_error(id: Uuid, error: StorageError) -> ResponseEnvelope {
         StorageError::DuplicateResource => ("duplicate_resource", "resource already exists"),
         StorageError::RitualAlreadyRunning => {
             ("ritual_already_running", "ritual is already running")
+        }
+        StorageError::DiscoveryAlreadyRunning => (
+            "discovery_already_running",
+            "a discovery run is already running",
+        ),
+        StorageError::DiscoveryInputTooLarge => {
+            ("discovery_input_too_large", "discovery input is too large")
+        }
+        StorageError::SessionNotFound => ("session_not_found", "session was not found"),
+        StorageError::SuggestionNotFound => ("suggestion_not_found", "suggestion was not found"),
+        StorageError::SuggestionInvalidState => (
+            "suggestion_invalid_state",
+            "suggestion state does not allow this operation",
+        ),
+        StorageError::SuggestionStale => ("suggestion_stale", "suggestion is stale"),
+        StorageError::InvalidSnoozeDuration => {
+            ("invalid_snooze_duration", "snooze duration is invalid")
         }
         _ => ("internal_error", "storage operation failed"),
     };

@@ -275,6 +275,226 @@
       },
       "additionalProperties": false
     },
+    "DiscoveredSession": {
+      "type": "object",
+      "required": [
+        "algorithm_version",
+        "anchor_event_id",
+        "eligible",
+        "event_count",
+        "events",
+        "id",
+        "kind",
+        "started_at",
+        "workspace_resource_id"
+      ],
+      "properties": {
+        "algorithm_version": {
+          "type": "string"
+        },
+        "anchor_event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "eligible": {
+          "type": "boolean"
+        },
+        "event_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SessionEvent"
+          }
+        },
+        "finished_at": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "workspace_resource_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DiscoveredSuggestion": {
+      "type": "object",
+      "required": [
+        "action_resource_ids",
+        "algorithm_version",
+        "confidence_basis_points",
+        "eligible_sessions",
+        "first_seen_at",
+        "id",
+        "last_seen_at",
+        "median_completion_ms",
+        "observation_span_seconds",
+        "pattern_fingerprint",
+        "support_sessions",
+        "supporting_session_ids",
+        "workspace_resource_id"
+      ],
+      "properties": {
+        "action_resource_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "algorithm_version": {
+          "type": "string"
+        },
+        "confidence_basis_points": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "eligible_sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "first_seen_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "last_seen_at": {
+          "type": "string"
+        },
+        "median_completion_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "observation_span_seconds": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "pattern_fingerprint": {
+          "type": "string"
+        },
+        "support_sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "supporting_session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "workspace_resource_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DiscoveryRun": {
+      "type": "object",
+      "required": [
+        "algorithm_version",
+        "candidates_evaluated",
+        "id",
+        "input_event_count",
+        "sessions_upserted",
+        "started_at",
+        "status",
+        "suggestions_created"
+      ],
+      "properties": {
+        "algorithm_version": {
+          "type": "string"
+        },
+        "candidates_evaluated": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "failure_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "input_event_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "sessions_upserted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/DiscoveryRunStatus"
+        },
+        "suggestions_created": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "DiscoveryRunReport": {
+      "type": "object",
+      "required": [
+        "run"
+      ],
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/DiscoveryRun"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DiscoveryRunStatus": {
+      "type": "string",
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "aborted"
+      ]
+    },
     "DoctorReport": {
       "type": "object",
       "required": [
@@ -1584,6 +1804,186 @@
               ]
             }
           }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/DiscoveryRunReport"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "discovery.run"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/DiscoveryRunReport"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "discovery.status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SessionsList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "sessions.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SessionShow"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "session.show"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SuggestionsList"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "suggestions.list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SuggestionShow"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "suggestion.show"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SuggestionShow"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "suggestion.snooze"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SuggestionShow"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "suggestion.dismiss"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/SuggestionShow"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "suggestion.block"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "kind"
+          ],
+          "properties": {
+            "data": {
+              "$ref": "#/definitions/RitualRecord"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "suggestion.accept"
+              ]
+            }
+          }
         }
       ]
     },
@@ -1803,6 +2203,65 @@
         "sensitive"
       ]
     },
+    "SessionEvent": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "is_anchor",
+        "ordinal",
+        "received_at",
+        "resource_id"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "is_anchor": {
+          "type": "boolean"
+        },
+        "ordinal": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "received_at": {
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionShow": {
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "$ref": "#/definitions/DiscoveredSession"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionsList": {
+      "type": "object",
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DiscoveredSession"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "StatusReport": {
       "type": "object",
       "required": [
@@ -1825,6 +2284,62 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionShow": {
+      "type": "object",
+      "required": [
+        "status",
+        "suggestion"
+      ],
+      "properties": {
+        "accepted_ritual_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "snoozed_until": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/SuggestionStatus"
+        },
+        "suggestion": {
+          "$ref": "#/definitions/DiscoveredSuggestion"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "snoozed",
+        "dismissed",
+        "accepted",
+        "blocked"
+      ]
+    },
+    "SuggestionsList": {
+      "type": "object",
+      "required": [
+        "suggestions"
+      ],
+      "properties": {
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DiscoveredSuggestion"
+          }
         }
       },
       "additionalProperties": false

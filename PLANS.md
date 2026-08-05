@@ -28,6 +28,42 @@
 - [x] Unit, property, and integration coverage
 - [x] GitHub mainへPhase 1 root commitを初期公開
 
+## Phase 4A: explainable workspace discovery
+
+- [x] `workspace-browser-start/v1` の純粋Sessionizer／Prefix候補生成
+- [x] received_at順、10分Startup Window、2〜5 Action、固定Threshold
+- [x] SQLite v5（Discovery Run、Session、Evidence、Suggestion）
+- [x] Discovery／Session／SuggestionのStrict IPCとDaemon経由CLI
+- [x] Snooze、Dismiss、Block、冪等なSuggestion Accept（Draft Ritualのみ）
+- [x] Browser Actionで生成したTabの60秒Ephemeral Suppression
+- [x] Phase 4AのSecurity境界と非目標を文書化
+
+合理的仮定: Lookbackは30日、Input上限は100,000件、DiscoveryはCLI／IPC要求時だけ
+実行し、期限切れの抑止状態はListまたはRunで再調整する。新規SuggestionはRolling 24時間で
+最大1件、`pending`だけの候補は最大5件、Dismissは30日抑止とする。
+Scheduler、AI、汎用系列マイニングは追加しない。
+
+### Phase 4A PR #3 final hardening
+
+PR #3 head `a6cea1d3bc3f79fbde1daa0e36dc60f98dc9343c` の確認で、Anchorごとの全Event再走査により
+Browser Eventが複数Sessionへ重複所属し得た。PrefixのcompletionがSession末尾を使い、Workspace内選択後の
+Global Rankingがaction数をsupportより先に比較していた。DiscoveryのResource/Scope/Persist失敗ではRunが
+`running`のまま残り、pending capがsnoozed/dismissedも数え、v5のanchor_event_id FKがRaw Event retentionを
+阻害していた。さらにSession/Suggestion IPCが`RitualIdRequest`を流用し、Browser SuppressionはURL変更と
+completeの複数Callbackで誤消費し得た。
+
+- [x] received_at/Event ID順を一度だけ走査する状態機械へSessionizerを変更し、Session境界と一意所属を保証
+- [x] Prefix末尾Eventのcompletion、下位中央値、Workspace内最長Prefix、Global support優先Rankingを実装
+- [x] Discovery Failure Finalization、pending-only cap、v5 Anchor FK除去を実装
+- [x] `SessionIdRequest`／`SuggestionIdRequest`を追加し、Strict SchemaとCLI/Coreを分離
+- [x] Prepared Tab作成→Suppression保存→URL遷移の順序と、URL/complete両Callbackの抑止を実装
+- [x] Session Boundary、Prefix completion、Retention、Protocol ID、Suppression回帰Testを追加
+
+Phase 4Aの中央値は偶数件でも整数の下位中央値（`sorted[(n-1)/2]`）を使う。Discovery Runは開始後の
+Resource load、Scope load、Mining、Persistの各失敗で`failed`へ終端化し、公開Errorは`discovery_failed`と
+安全な固定文だけを返す。Raw Event削除後もSession summaryとSuggestion Evidenceを保持するため、
+`sessions.anchor_event_id`はUNIQUEなEvidence文字列であり、`events`への外部キーではない。
+
 ## Phase 2: explicit ritual manual execution
 
 - [x] Resource、Ritual、Immutable RitualVersion、Approval、Execution domain
@@ -136,3 +172,18 @@ PR #2 head `fe7bac2187415ee6f1954f6db9229622a6c2f6c3` の再現確認では、Br
 - [x] Observation Pauseをactive→paused／paused→paused成功の冪等操作へ変更し、Browser/VS Codeの再送を可能にした
 - [x] Adapter接続ごとにopaqueな`ConnectionToken`を発行し、`disconnect_if_current`で旧接続の終了が新接続を削除しないようにした
 - [x] 接続置換時は旧Tokenに属するPending ActionだけをDisconnectedで解放し、新接続のPendingを保持する回帰Testを追加した
+
+### Phase 4A PR #3 dogfooding hardening
+
+PR #3 head `478547a7f83ea64e1b5ce6476e7501c66f2c2379` の再現確認では、Browserの自己生成Tab抑止が全Tabを
+`chrome.storage.session`の一つのObjectへRead-Modify-Writeしていたため、同時ActionでLost Updateが起こり得た。
+`createPreparedTab()`がTab IDを返さない場合も`opened`を返し、Discoveryが公開`list_events`へ100001件上限を要求して
+通常ClientのResponse境界を拡張していた。
+
+- [x] Tabごとの独立Session Key、同一Tabの直列化、URL/complete両Callbackを抑止する短命Tombstoneを実装
+- [x] 不正または未返却のPrepared Tab IDを`tab_id_unavailable`として失敗させ、Navigation/Suppressionを実行しない回帰Testを追加
+- [x] 公開Event Listを100件へ固定し、Discovery専用の内部Single Writer Scan（最大100001件）を追加
+- [x] 100001件Fixtureで公開ListとDiscovery Scanの上限・順序を検証し、Discovery Coreが専用Operationだけを使うよう変更
+
+合理的仮定: 公開`events.list`はIPC 256KiB境界を安全側に保つためProtocol既定値と同じ100件を上限とし、
+100001件の大規模ScanはDiscovery内部だけで使用する。Suppressionのcomplete Tombstoneは5秒または元の期限まで保持する。

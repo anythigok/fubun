@@ -4,6 +4,7 @@ use fubun_domain::{
     ActionSpec, Event, Execution, ExecutionStep, ObservationScope, Resource, Ritual,
     RitualDefinition, RitualVersion,
 };
+use fubun_mining::{DiscoveredSession, DiscoveredSuggestion, DiscoveryRun};
 use fubun_protocol::{
     AdapterRequestEnvelope, AdapterResponseEnvelope, RequestEnvelope, ResponseEnvelope,
 };
@@ -60,6 +61,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     write_schema(
         output.join("adapter-response-envelope.schema.json"),
         &schema_for!(AdapterResponseEnvelope),
+    )?;
+    write_schema(
+        output.join("discovery-run.schema.json"),
+        &schema_for!(DiscoveryRun),
+    )?;
+    write_schema(
+        output.join("session.schema.json"),
+        &schema_for!(DiscoveredSession),
+    )?;
+    write_schema(
+        output.join("suggestion.schema.json"),
+        &schema_for!(DiscoveredSuggestion),
     )?;
     Ok(())
 }

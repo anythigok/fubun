@@ -14,13 +14,107 @@ export interface BrowserTab {
   id?: number;
   url?: string;
   incognito?: boolean;
+  navigationPhase?: NavigationPhase;
 }
+
+export type NavigationPhase = "url" | "complete";
 
 export interface BrowserApi {
   activeTab(): Promise<BrowserTab | undefined>;
   allTabs(): Promise<BrowserTab[]>;
-  createTab(url: string): Promise<void>;
+  createPreparedTab(): Promise<number | undefined>;
+  navigateTab(tabId: number, url: string): Promise<void>;
   permissionGranted(origin: string): Promise<boolean>;
+}
+
+export interface SelfGeneratedSuppressionStore {
+  mark(tabId: number, resourceId: string, expiresAt: number): Promise<void>;
+  consume(tabId: number, resourceId: string, now: number, phase?: NavigationPhase): Promise<boolean>;
+}
+
+export interface SessionSuppressionStorage {
+  get(key: string): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+type StoredSuppressionEntry = {
+  resource_id: string;
+  expires_at: number;
+  phase: "awaiting_complete" | "completed";
+};
+
+const SUPPRESSION_TOMBSTONE_MS = 5_000;
+
+/**
+ * Stores each ephemeral tab suppression under an independent session key.
+ * Per-key queues make same-tab phase transitions cancellation-safe while
+ * allowing unrelated tabs to update concurrently without lost updates.
+ */
+export function createSessionSuppressionStore(storage: SessionSuppressionStorage): SelfGeneratedSuppressionStore {
+  const queues = new Map<string, Promise<void>>();
+  const keyFor = (tabId: number): string => `fubun.self-generated-tab.${tabId}`;
+
+  function enqueue<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const previous = queues.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(work);
+    const marker = run.then(() => undefined, () => undefined);
+    queues.set(key, marker);
+    void marker.then(() => {
+      if (queues.get(key) === marker) queues.delete(key);
+    });
+    return run;
+  }
+
+  function parse(value: unknown): StoredSuppressionEntry | undefined {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    try {
+      rejectUnknownKeys(record, ["resource_id", "expires_at", "phase"]);
+    } catch {
+      return undefined;
+    }
+    if (!isUuid(record.resource_id) || typeof record.expires_at !== "number" || !Number.isFinite(record.expires_at)
+      || (record.phase !== "awaiting_complete" && record.phase !== "completed")) {
+      return undefined;
+    }
+    return {
+      resource_id: record.resource_id,
+      expires_at: record.expires_at,
+      phase: record.phase,
+    };
+  }
+
+  return {
+    mark(tabId, resourceId, expiresAt) {
+      const key = keyFor(tabId);
+      return enqueue(key, async () => {
+        await storage.set({ [key]: { resource_id: resourceId, expires_at: expiresAt, phase: "awaiting_complete" } });
+      });
+    },
+    consume(tabId, resourceId, now, phase = "complete") {
+      const key = keyFor(tabId);
+      return enqueue(key, async () => {
+        const value = await storage.get(key);
+        const candidate = parse(value[key]);
+        if (candidate === undefined || candidate.resource_id !== resourceId) return false;
+        if (candidate.expires_at <= now) {
+          await storage.remove(key);
+          return false;
+        }
+        if (phase === "complete" && candidate.phase === "awaiting_complete") {
+          await storage.set({
+            [key]: {
+              ...candidate,
+              phase: "completed",
+              expires_at: Math.min(candidate.expires_at, now + SUPPRESSION_TOMBSTONE_MS),
+            },
+          });
+        }
+        return true;
+      });
+    },
+  };
 }
 
 export interface MappingStore {
@@ -45,6 +139,7 @@ export interface BrowserIntegrationOptions {
   extensionVersion: () => string;
   uuid?: () => string;
   now?: () => number;
+  suppression?: SelfGeneratedSuppressionStore;
 }
 
 type MappingState = "active" | "inactive" | "pause_pending";
@@ -212,6 +307,8 @@ export class BrowserIntegration {
     const hash = await canonicalUrlHash(canonical);
     const mapping = (await this.mappings()).find((candidate) => candidate.canonical_url_hash === hash && this.isActive(candidate));
     if (mapping === undefined) return;
+    if (this.options.suppression !== undefined && typeof tab.id === "number"
+      && await this.options.suppression.consume(tab.id, mapping.resource_id, this.now(), tab.navigationPhase)) return;
     if (!await this.options.browser.permissionGranted(mapping.origin_pattern)) {
       await this.onPermissionsRemoved([mapping.origin_pattern]);
       return;
@@ -259,7 +356,7 @@ export class BrowserIntegration {
         if (hash !== mapping.canonical_url_hash) {
           result = failure("resource_identity_mismatch", "resolved browser resource did not match the registered resource");
         } else {
-          result = await this.ensureTabOpen(canonical, hash);
+          result = await this.ensureTabOpen(canonical, hash, mapping.resource_id);
         }
       }
     } catch (error) {
@@ -275,7 +372,7 @@ export class BrowserIntegration {
     });
   }
 
-  private async ensureTabOpen(canonical: string, expectedHash: string): Promise<{ status: "succeeded" | "skipped" | "failed"; result_code: string; redacted_message: string }> {
+  private async ensureTabOpen(canonical: string, expectedHash: string, resourceId: string): Promise<{ status: "succeeded" | "skipped" | "failed"; result_code: string; redacted_message: string }> {
     for (const tab of await this.options.browser.allTabs()) {
       if (typeof tab.url !== "string") continue;
       try {
@@ -286,7 +383,16 @@ export class BrowserIntegration {
         // Unsupported tab URLs are never emitted or persisted.
       }
     }
-    await this.options.browser.createTab(canonical);
+    const tabId = await this.options.browser.createPreparedTab();
+    if (tabId === undefined || !Number.isInteger(tabId) || tabId < 0) {
+      return failure("tab_id_unavailable", "browser did not return a usable tab identifier");
+    }
+    if (this.options.suppression !== undefined) {
+      // Persist the ephemeral suppression before navigating the newly
+      // created tab.  This ordering closes the navigation-vs-storage race.
+      await this.options.suppression.mark(tabId, resourceId, this.now() + 60_000);
+    }
+    await this.options.browser.navigateTab(tabId, canonical);
     return { status: "succeeded", result_code: "opened", redacted_message: "registered page opened" };
   }
 
